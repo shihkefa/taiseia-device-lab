@@ -2,6 +2,8 @@
 
 **線上使用：**以桌面版 Chrome 或 Edge 開啟 [TaiSEIA Lab](https://shihkefa.github.io/taiseia-device-lab/)，按「連接串口」並選取控制器所接的 COM port。請勿在檔案總管雙擊 `dist/index.html`；`file://` 無法載入頁面所需的 JavaScript 模組。
 
+GitHub Pages 從 `main` 分支根目錄發布；根目錄的入口頁會導向 `dist/index.html`。
+
 網頁扮演家電，控制器透過電腦的 USB 串口介面向網頁讀寫。本專案使用純 HTML/CSS/JavaScript，不需要 npm 安裝或後端資料庫。封包與設備狀態只存在瀏覽器工作階段，不會上傳。
 
 ## 本機啟動

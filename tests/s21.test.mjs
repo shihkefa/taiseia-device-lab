@@ -83,6 +83,28 @@ test('D1 validates the complete command before changing any state',()=>{
   }
 });
 
+test('D1 preserves the documented 80 unspecified setpoint through F1 and profile round trips',()=>{
+  // asund 30239f5 daikin_s21_types.h:50-57 maps the fine-temperature
+  // sentinel 0x80 to NaN; it must not be interpreted as a 50 C target.
+  const e=new S21Engine();
+  for(const mode of [50,54]){
+    const result=e.handle(frameS21('D1',[49,mode,0x80,65]));
+    assert.equal(result.accepted,true);
+    assert.deepEqual(replies(result),['06']);
+    assert.equal(e.service(3).raw,65535);
+    assert.equal(validateS21Value(e.service(3),65535),null);
+    assert.match(displayS21Value(e.service(3),65535),/未指定.*80/);
+    assert.deepEqual(data(e.handle(F1)),[49,mode,0x80,65]);
+    assert.deepEqual(data(new S21Engine(e.profile).handle(F1)),[49,mode,0x80,65]);
+  }
+  const before=structuredClone(e.services);
+  assert.equal(e.handle(frameS21('D1',[48,51,0x80,56])).accepted,false);
+  assert.deepEqual(e.services,before,'an invalid fan cannot partially apply a sentinel command');
+  assert.equal(e.handle(D1).accepted,true);
+  assert.equal(e.service(3).raw,50);
+  assert.deepEqual(e.handle(F1).responses[1],G1);
+});
+
 test('bad checksum is silently dropped without ACK or mutation',()=>{
   const e=new S21Engine(),before=structuredClone(e.services),broken=D1.slice();
   broken[broken.length-2]^=1;

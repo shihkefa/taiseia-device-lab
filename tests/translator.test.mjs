@@ -39,6 +39,20 @@ test('F1 query has no invented state fields; D1 and G1 preserve distinct roles',
   assert.match(warnings(decode(D1,{direction:'TX'})),/方向/);
 });
 
+test('S21 D1 and G1 80 setpoint means unspecified rather than 50 degrees',()=>{
+  for(const [wire,direction] of [
+    ['02 44 31 31 32 80 41 99 03','RX'],
+    ['02 47 31 31 32 80 41 9C 03','TX'],
+  ]){
+    const p=decode(wire,{direction});
+    assert.equal(p.checksum.valid,true);
+    assert.match(value(p,'設定溫度'),/未指定.*80/);
+    assert.doesNotMatch(p.summary,/50 °C/);
+    assert.doesNotMatch(warnings(p),/超出.*10–32/);
+    assert.equal(p.fields.find(field=>field.label==='設定溫度').raw,'80');
+  }
+});
+
 test('S21 sensor numbers decode reversed decimal digits and preserve negative tenths',()=>{
   for(const [wire,expected] of [
     ['02 53 48 30 33 32 2B 5B 03','23 °C'],

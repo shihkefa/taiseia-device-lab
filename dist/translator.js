@@ -136,10 +136,11 @@ function decodeS21Packet(b,options,p,field,warn){
   if(cmd.length===2&&['F','R'].includes(cmd[0])){interpreted=true;p.summary+= ' · 控制器查詢';if(data.length)warn('此 v2 查詢通常不含 payload；額外資料保留原樣。');if(!Object.hasOwn(S21_COMMANDS,query))warn('可辨識查詢格式；功能旗標或機型語意未在此轉譯表完整定義。');}
   else if(['D1','G1'].includes(cmd)&&expected(4)){
     interpreted=true;const power=data[0]===48?'關機':data[0]===49?'開機':`未知電源 ${hex([data[0]])}`,m=mode[data[1]-48]||`未知模式 ${hex([data[1]])}`,f=fan[data[3]]||`未知風速 ${hex([data[3]])}`,t=(data[2]-28)/2;
-    value(0,1,'電源',power);value(1,1,'模式',m);value(2,1,'設定溫度',`${t} °C = (0x${hex([data[2]])} − 28) / 2`);value(3,1,'風速',f);
-    p.summary=`S21 ${cmd} · ${power}／${m}／${t} °C／風速 ${f}`;
+    const target=data[2]===0x80?'未指定／不適用 (80)':`${t} °C`;
+    value(0,1,'電源',power);value(1,1,'模式',m);value(2,1,'設定溫度',data[2]===0x80?target:`${target} = (0x${hex([data[2]])} − 28) / 2`);value(3,1,'風速',f);
+    p.summary=`S21 ${cmd} · ${power}／${m}／${target}／風速 ${f}`;
     if(![48,49].includes(data[0])||!mode[data[1]-48]||!fan[data[3]])warn('含未定義電源、模式或風速列舉值。');
-    if(t<10||t>32)warn('設定溫度超出本模擬設定的 10–32°C；實機範圍需另校對。');
+    if(data[2]!==0x80&&(t<10||t>32))warn('設定溫度超出本模擬設定的 10–32°C；實機範圍需另校對。');
   }else if(['D5','G5'].includes(cmd)&&expected(4)){
     interpreted=true;const swing={48:'停止',49:'上下',50:'左右',55:'上下＋左右'}[data[0]]||`未知擺風 ${hex([data[0]])}`;value(0,1,'擺風',swing);value(1,3,'其他機型欄位','原始資料；含加濕／保留欄位，不通用推斷');p.summary+=` · ${swing}`;if(![48,49,50,55].includes(data[0]))warn('擺風列舉值未收錄，請依機型校對。');
   }else if(['D6','G6'].includes(cmd)&&expected(4)){
@@ -235,7 +236,7 @@ export function translateCapture(capture,options={}){
     if(record.source!==lastSource){contextId=null;lastSource=record.source;}
     let profile,raw=capture.profiles?.[record.profileRevision];
     if(raw?.protocol!=='s21'&&raw){try{profile=validateProfile(structuredClone(raw));}catch{if(!warnings.length)warnings.push('部分設定快照未通過驗證，使用內建功能表。');}}
-    const optionsForPacket={...options,profile,protocol:['taiseia','s21'].includes(record.protocol)?record.protocol:options.protocol||'auto',direction:record.direction,deviceId:selection(options)||profile?.saId||contextId||'auto',format:record.format==='bare-services'?'bare-services':options.format,requestBytes:previous.get(record.requestId)};
+    const optionsForPacket={...options,profile,protocol:['taiseia','s21'].includes(record.protocol)?record.protocol:options.protocol||'auto',direction:record.direction,deviceId:selection(options)||profile?.saId||contextId||'auto',format:['bare-services','registration'].includes(record.format)?record.format:options.format,requestBytes:previous.get(record.requestId)};
     const p=decodePacket(bytes,optionsForPacket);p.index=packets.length+1;p.recordId=record.id;p.source=String(record.source||'匯入').slice(0,100);p.timestamp=String(record.timestamp||'').slice(0,100);packets.push(p);
     if(p.checksum?.valid){if(p.deviceId&&p.deviceId!=='s21')contextId=p.deviceId;if(record.direction==='RX'&&bytes.length===6&&bytes[1]===0&&bytes[3]===255&&bytes[4]===255)previous.set(record.id,bytes);}
   }

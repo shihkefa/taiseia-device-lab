@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {PROFILES} from '../dist/catalog.js';
+import {translateCapture} from '../dist/translator.js';
 
 let instance=0;
 const appUrl=new URL('../dist/app.js',import.meta.url);
@@ -24,7 +26,21 @@ async function appHarness(context,{holdOpen=false,mockClock=false}={}) {
       dataset:{},scrollTop:0,clientHeight:0,scrollHeight:0,
       classList:{toggle(){},add(){},remove(){}},handlers:new Map(),
       addEventListener(type,fn){this.handlers.set(type,fn);},
-      querySelectorAll(){return [];},
+      querySelectorAll(selector){
+        // Resolve only generated state controls from the actual markup. This
+        // keeps the app's own change handlers and rendered disabled state in use.
+        if(id!=='device-fields'||!['[data-value]','[data-unknown]'].includes(selector))return [];
+        const key=selector.slice(6,-1),found=[];
+        const pattern=new RegExp(`<[^>]+data-${key}="(\\d+)"[^>]*>`,'g');
+        for(const match of this.innerHTML.matchAll(pattern)){
+          const tag=match[0],child=element(key==='value'?`value-${match[1]}`:`unknown-${match[1]}`);
+          child.dataset[key]=match[1];
+          child.value=tag.match(/\svalue="([^"]*)"/)?.[1]||'';
+          child.checked=/\bchecked\b/.test(tag);child.disabled=/\bdisabled\b/.test(tag);
+          found.push(child);
+        }
+        return found;
+      },
     });
     return elements.get(id);
   }
@@ -59,6 +75,7 @@ async function appHarness(context,{holdOpen=false,mockClock=false}={}) {
     getElementById:element,querySelectorAll:()=>[],querySelector:()=>null,
     addEventListener(){},activeElement:null,
   });
+
   setGlobal('window',{addEventListener(){}});
   setGlobal('isSecureContext',true);
   // Render callbacks are unnecessary for these assertions. Scan intervals are
@@ -112,6 +129,59 @@ async function appHarness(context,{holdOpen=false,mockClock=false}={}) {
     },
   };
 }
+
+test('imported TaiSEIA device remains selected after switching to S21 and back',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);
+    const profile=structuredClone(PROFILES.find(p=>p.saId===4));
+    profile.model='IMPORTED-DH';
+    app.element('import-profile').files=[{size:1000,text:async()=>JSON.stringify(profile)}];
+    await app.fire('import-profile','change');
+    assert.equal((await app.inspect()).device.saId,4);
+    app.element('protocol-mode').value='s21';app.fire('protocol-mode','change');
+    assert.equal((await app.inspect()).device.saId,'s21');
+    app.element('protocol-mode').value='taiseia';app.fire('protocol-mode','change');
+    assert.equal((await app.inspect()).device.saId,4);
+    assert.equal((await app.inspect()).device.model,'IMPORTED-DH');
+  });
+
+test('S21 unspecified target renders blank with its wire sentinel and can be edited back to a temperature',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);
+    app.element('protocol-mode').value='s21';app.fire('protocol-mode','change');
+    app.element('test-command').value='02 44 31 31 32 80 41 99 03';
+    app.fire('inject');
+    assert.equal((await app.inspect()).device.services.find(s=>s.id===3).raw,65535);
+    assert.match(app.element('state-summary').innerHTML,/未指定.*80/);
+    assert.equal(app.element('value-3').value,'');
+    assert.equal(app.element('value-3').disabled,true);
+    assert.match(app.element('device-fields').innerHTML,/未指定.*80/);
+    app.element('unknown-3').checked=false;app.fire('unknown-3','change');
+    assert.equal((await app.inspect()).device.services.find(s=>s.id===3).raw,52);
+    assert.equal(Number(app.element('value-3').value),26);
+    assert.equal(app.element('value-3').disabled,false);
+    app.element('value-3').value='24.5';app.fire('value-3','change');
+    app.element('test-command').value='02 46 31 77 03';app.fire('inject');
+    const info=await app.inspect();
+    const reply=info.records.filter(r=>r.direction==='TX'&&r.bytes[1]===0x47&&r.bytes[2]===0x31).at(-1);
+    assert.equal(reply.bytes[5],77,'24.5 C returns fine encoding 28 + 49');
+    assert.match(app.element('state-summary').innerHTML,/24\.5 °C/);
+  });
+
+test('registration with Class 7 retains registration identity in capture and translation',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);
+    app.element('class-id').value='7';app.fire('class-id','change');
+    app.element('test-command').value='06 00 00 FF FF 06';app.fire('inject');
+    const info=await app.inspect(),reply=info.records.find(r=>r.direction==='TX');
+    assert.equal(reply.bytes[2],7);
+    assert.equal(reply.format,'registration');
+    assert.match(reply.description,/註冊.*SA 0x01/);
+    assert.equal(info.discovery.identitySent!==false,true);
+    const report=translateCapture({records:[reply]});
+    assert.match(report.packets[0].summary,/註冊回覆/);
+    assert.equal(report.packets[0].deviceId,1);
+  });
 
 for(const phase of ['requestPort','port.open']) {
   test(`offline controls cannot inject handshake evidence while ${phase} is pending`,

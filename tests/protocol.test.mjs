@@ -4,6 +4,15 @@ import {PROFILES} from '../dist/catalog.js';
 import {DeviceEngine,FrameParser,frame,checkFrame,parseHex,hex,word,displayValue,validateProfile,decode} from '../dist/protocol.js';
 import {Capture} from '../dist/capture.js';
 const engine=sa=>new DeviceEngine(PROFILES.find(p=>p.saId===sa));
+test('registration decode uses its request instead of mistaking Class ID for common service ID',()=>{
+  const e=engine(1),request=frame(0,0,65535);
+  for(let id=0;id<16;id++){
+    e.profile.classId=id;
+    const reply=e.handle(request).response;
+    assert.match(decode(reply,e.profile,'TX',request),/註冊.*SA 0x01/);
+  }
+  assert.match(decode(e.status(),e.profile,'TX',frame(0,8,65535)),/完整狀態/);
+});
 test('bare capabilities use request context and too-short variant is rejected',()=>{const e=engine(1);e.profile.servicesFormat='bare';const req=frame(0,7,65535),res=e.handle(req).response;assert(checkFrame(res));assert.match(decode(res,e.profile,'TX',req),/精簡支援服務清單/);e.profile.services.forEach(s=>s.enabled=s.id===0);assert.throws(()=>validateProfile(e.profile),/至少保留兩項/);assert.doesNotThrow(()=>decode(frame(0,0,65535),e.profile,'TX'));});
 test('profile text defaults do not crash rendering and ERV reset-only policy is explicit',()=>{const p=structuredClone(PROFILES[0]);delete p.services[0].confidence;assert.equal(validateProfile(p).services[0].confidence,'使用者定義');const e=engine(14);for(const id of [28,29]){assert.equal(e.handle(frame(14,id|128,1)).accepted,false);assert.equal(e.handle(frame(14,id|128,0)).accepted,true);}assert.equal(engine(3).service(1).enabled,false);});
 test('known checksum vectors and strict hex input',()=>{assert.equal(hex(frame(1,0x83,26)),'06 01 83 00 1A 9E');assert.equal(hex(frame(0,8,65535)),'06 00 08 FF FF 0E');assert.equal(hex(parseHex('0x06:01,83 00 1a 9e')),'06 01 83 00 1A 9E');assert.throws(()=>parseHex('06 00 ZZ'));assert.throws(()=>parseHex('060'));});

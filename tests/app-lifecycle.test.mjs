@@ -379,6 +379,23 @@ test('physical S21 D2 startup ACK permits F1 polling but cannot confirm a handsh
     app.element('translator-input').value='RX: 02 44 32 30 A6 03';app.fire('translator-run');assert.match(app.element('translator-results').innerHTML,/ACK-only/);
   });
 
+test('physical S21 D4 compatibility is ACK-only and subsequent controls update UI and F1 readback',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('protocol-mode').value='s21';app.fire('protocol-mode','change');
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;
+    await app.push([2,68,50,48,166,3]);await app.push([2,68,52,48,93,5,3]);
+    assert.deepEqual(app.writes,[[6],[6]]);assert.equal((await app.inspect()).discovery.confirmedAt,null);
+    assert.equal((await app.inspect()).device.services.find(s=>s.id===0).raw,0);
+    // Fixed wire vector: on, heat, 24 C, fan 3. Then query actual state.
+    await app.push([2,68,49,49,52,76,53,91,3]);assert.deepEqual(app.writes.at(-1),[6]);
+    const state=await app.inspect();for(const [id,raw] of [[0,1],[1,4],[3,48],[2,53]])assert.equal(state.device.services.find(s=>s.id===id).raw,raw);
+    assert.match(app.element('device-fields').innerHTML,/value-3/);
+    await app.push([2,70,49,119,3]);assert.deepEqual(app.writes.at(-1),[6,2,71,49,49,52,76,53,94,3]);
+    await app.push([6]);assert.equal(app.element('handshake-state').textContent,'握手已確認（ACK）');
+    await app.push([2,68,52,48,93,5,3]);assert.deepEqual(app.writes.at(-1),[6]);
+    assert.deepEqual((await app.inspect()).device,state.device);
+  });
+
 test('a CN105 frame decoded at the S21 UART preset is queued until TX framing is corrected',
   {timeout:3000,concurrency:false},async context=>{
     const app=await appHarness(context,{mockClock:true}),connecting=app.connect();app.request.resolve(app.port);await connecting;await app.advanceTo(4000);

@@ -1,7 +1,7 @@
 // Passive analysis only: never constructs a device engine or accesses a serial port.
 import {PROFILES} from './catalog.js';
 import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js';
-import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS} from './s21.js';
+import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS,isCompatibleS21D4} from './s21.js';
 import {checkCN105,checksumCN105,inspectCN105} from './cn105.js';
 const names=new Map(PROFILES.map(p=>[p.saId,p.name]));
 const printable=bytes=>Array.from(bytes,b=>b>=32&&b<=126?String.fromCharCode(b):`\\x${b.toString(16).padStart(2,'0')}`).join('');
@@ -143,6 +143,11 @@ function decodeS21Packet(b,options,p,field,warn){
     interpreted=true;value(0,1,'D2 相容值',data[0]===0x30?'ASCII 0（30）；只需 ACK，不修改設備設定':'未支援的原始值 '+hex(data));p.summary='S21 D2 · 相容啟動命令／stub · ACK-only';
     if(data[0]!==0x30)warn('已知 D2 相容值為單一 ASCII 0（30）。');
     warn('D2 實際功能未確認；不當作 F2 能力寫入，也不能單憑 ACK 判定完整握手。');
+  }else if(cmd==='D4'){
+    interpreted=true;value(0,data.length,'D4 原始資料',hex(data));p.summary='S21 D4 · 相容命令（語意未確認）';
+    if(isCompatibleS21D4(data))p.summary+=' · ACK-only';
+    else warn('此 D4 資料未在相容表內；模擬器只接受 30 5D 或單一 31，其他值回 NAK。');
+    warn('D4 實際功能未確認；相容 ACK 不修改設備狀態，不推定為電源、溫度或 F4 錯誤狀態設定。');
   }else if(['D1','G1'].includes(cmd)&&expected(4)){
     interpreted=true;const power=data[0]===48?'關機':data[0]===49?'開機':`未知電源 ${hex([data[0]])}`,m=mode[data[1]-48]||`未知模式 ${hex([data[1]])}`,f=fan[data[3]]||`未知風速 ${hex([data[3]])}`,t=(data[2]-28)/2;
     const target=data[2]===0x80?'未指定／不適用 (80)':`${t} °C`;

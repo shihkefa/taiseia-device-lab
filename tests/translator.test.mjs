@@ -18,6 +18,17 @@ const value=(packet,label)=>packet.fields.find(field=>field.label===label)?.valu
 const warnings=packet=>packet.warnings.join('\n');
 const frozen=object=>{if(object&&typeof object==='object'){Object.values(object).forEach(frozen);Object.freeze(object);}return object;};
 
+test('D4 preserves captured bytes and distinguishes compatibility ACK from a mapped setting',()=>{
+  for(const wire of ['02 44 34 30 5D 05 03','02 44 34 31 A9 03']){
+    const p=decode(wire,{direction:'RX'});assert.equal(p.checksum.valid,true);
+    assert.match(p.summary,/D4.*語意未確認.*ACK-only/);assert.match(warnings(p),/不修改設備狀態/);
+    assert.equal(p.fields.find(f=>f.label==='D4 原始資料').raw,wire.includes('5D')?'30 5D':'31');
+    assert.equal(value(p,'電源'),undefined);assert.equal(value(p,'設定溫度'),undefined);
+  }
+  const unsupported=decode('02 44 34 30 A8 03',{direction:'RX'});
+  assert.doesNotMatch(unsupported.summary,/ACK-only/);assert.match(warnings(unsupported),/其他值回 NAK/);
+});
+
 test('F1 query has no invented state fields; D1 and G1 preserve distinct roles',()=>{
   const query=decode(F1,{direction:'RX'});
   assert.equal(query.protocol,'s21');

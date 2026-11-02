@@ -26,6 +26,20 @@ test('COM10 captured D2 startup takes one ASCII 0 and ACKs without mutating stat
   assert.equal(e.handle(F1).responses.length,2);
 });
 
+test('captured two-byte D4 and publicly recorded one-byte D4 ACK without changing state',()=>{
+  const e=new S21Engine(),before=structuredClone(e.profile);
+  for(const wire of ['02 44 34 30 5D 05 03','02 44 34 31 A9 03']){
+    const b=parseHex(wire);assert(checkS21(b));const result=e.handle(b);
+    assert.equal(result.accepted,true);assert.deepEqual(replies(result),['06']);
+    assert.deepEqual(result.changes,[]);assert.deepEqual(e.profile,before);
+    const broken=b.slice();broken[broken.length-2]^=1;assert.deepEqual(e.handle(broken).responses,[]);
+  }
+  for(const payload of [[],[0x30],[0x30,0x5c],[0x31,0x5d],[0x30,0x5d,0x30],[0x30,0x30,0x30,0x30]]){
+    const result=e.handle(frameS21('D4',payload));assert.equal(result.accepted,false);assert.deepEqual(replies(result),['15']);assert.deepEqual(e.profile,before);
+  }
+  assert.equal(e.handle(D1).accepted,true);assert.deepEqual(e.handle(F1).responses[1],G1);
+});
+
 test('S21 F1 and D1 vectors have checksum over command and payload only',()=>{
   assert.deepEqual(frameS21('F1'),F1);
   assert.deepEqual(frameS21('D1',[0x31,0x33,0x4e,0x41]),D1);

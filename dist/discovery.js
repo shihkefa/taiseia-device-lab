@@ -33,6 +33,12 @@ export class DiscoveryParser {
       if(this.protocol==='s21'&&[ACK,NAK].includes(first)){events.push({type:'control',protocol:'s21',bytes:Uint8Array.from(this.buffer.splice(0,1))});continue;}
       if(allowS21&&first===2){
         const end=this.buffer.indexOf(3,3);
+        // A stray S21 STX must not eat a complete request from another family.
+        // Test the current full frame first, so binary payload is not resliced.
+        if(this.protocol==='auto'&&(end<0||!checkS21(this.buffer.slice(0,end+1)))){
+          const next=this.buffer.findIndex((b,i)=>i>0&&(b===0xfc&&i+5<=this.buffer.length&&isCN105Request(this.buffer.slice(i,i+6+this.buffer[i+4]))||b===6&&isTaiRequest(this.buffer.slice(i,i+6))));
+          if(next>0){events.push({type:'error',protocol:'auto',bytes:this.buffer.splice(0,next),reason:'前導 STX 與後續協議不符；保留完整有效控制器命令'});continue;}
+        }
         const restart=this.buffer.indexOf(2,1);
         if(restart>0&&(end<0||restart<end)){events.push({type:'error',protocol:'s21',bytes:this.buffer.splice(0,restart),reason:'S21 新 STX；捨棄未完成前綴'});continue;}
         if(end<0){if(!stale&&this.buffer.length<=131)break;events.push({type:'error',protocol:'s21',bytes:this.buffer.splice(0,1),reason:'S21 殘包逾時／超長'});continue;}
@@ -44,6 +50,7 @@ export class DiscoveryParser {
       if(allowTai&&first===6){
         if(this.buffer.length<6){if(!stale)break;events.push({type:'error',protocol:this.protocol,bytes:this.buffer.splice(0,1),reason:'未完成的 TaiSEIA 請求／未辨識 ACK'});continue;}
         const bytes=Uint8Array.from(this.buffer.slice(0,6));
+        if(this.protocol==='auto'&&!isTaiRequest(bytes)&&isTaiRequest(this.buffer.slice(1,7))){events.push({type:'error',protocol:'taiseia',bytes:this.buffer.splice(0,1),reason:'前導 06 形成非請求框架；重新對齊有效控制器命令'});continue;}
         if(checkFrame(bytes)){this.buffer.splice(0,6);if(this.protocol==='auto'&&isTaiRequest(bytes))this.protocol='taiseia';events.push({type:'frame',protocol:'taiseia',bytes});continue;}
         events.push({type:'error',protocol:'taiseia',bytes:this.buffer.splice(0,1),reason:'TaiSEIA XOR 不符；重新同步'});continue;
       }

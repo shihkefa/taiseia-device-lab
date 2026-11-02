@@ -147,6 +147,16 @@ test('imported TaiSEIA device remains selected after switching to S21 and back',
     assert.equal((await app.inspect()).device.model,'IMPORTED-DH');
   });
 
+test('profile metadata cannot substitute another protocol formatter or inject markup into field labels',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context),profile=structuredClone(PROFILES[0]);
+    const power=profile.services.find(s=>s.id===0);power.command='<img src=x onerror=alert(1)>';power.protocol='cn105';power.raw=65535;
+    app.element('import-profile').files=[{size:1000,text:async()=>JSON.stringify(profile)}];await app.fire('import-profile','change');
+    assert.doesNotMatch(app.element('device-fields').innerHTML,/<img/);assert.equal(app.element('value-0').disabled,true);
+    const before=(await app.inspect()).device;profile.protocol='invalid';await app.fire('import-profile','change');
+    assert.deepEqual((await app.inspect()).device,before);assert.match(app.element('notice').textContent,/protocol/);
+  });
+
 test('S21 unspecified target renders blank with its wire sentinel and can be edited back to a temperature',
   {timeout:3000,concurrency:false},async context=>{
     const app=await appHarness(context);

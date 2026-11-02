@@ -113,7 +113,7 @@ export function inspectCN105(b){
   let summary='CN105 '+(CN105_TYPES[type]||'未知類型 0x'+hex([type??0]));
   f(0,1,'起始碼','FC');if(b.length>1)f(1,1,'TYPE',CN105_TYPES[type]||'未知類型');if(b.length>=4)f(2,2,'標頭／設備族',b[2]===1&&b[3]===0x30?'01 30 · 三菱電機空調族；不含型號':'非支援的 01 30 空調標頭');if(b.length>=5)f(4,1,'LEN',`${b[4]} payload bytes；實際總長 ${b.length}`);
   if(!valid)warnings.push('框架、標頭、長度或 checksum 不符；只顯示原始資料');
-  const sf=(offset,id,raw)=>{const s=CN105_PROFILE.services.find(s=>s.id===id);f(5+offset,1,s.name,validateCN105Value(s,raw&65535)?'未定義原始值 '+raw:displayCN105Value(s,raw&65535));};
+  const sf=(offset,id,raw)=>{const s=CN105_PROFILE.services.find(s=>s.id===id),invalid=validateCN105Value(s,raw&65535);f(5+offset,1,s.name,invalid?'未定義原始值 '+raw:displayCN105Value(s,raw&65535));if(invalid)warnings.push(s.name+' 超出參考映射；需依機型確認');};
   if(valid&&[0x5a,0x5b].includes(type)){f(5,d.length,'連線資料',hex(d));if(!isCN105Request(b))warnings.push('非預期的 CA 01 連線請求');}
   else if(valid&&[0x7a,0x7b,0x61].includes(type)){f(5,d.length,'回覆資料',hex(d));warnings.push(type===0x61?'寫入 ACK 不含原命令識別碼，需依前後順序配對':'連線回覆已出現；仍需後續控制器查詢確認流程');}
   else if(valid&&type===0x42&&d.length===16){summary+=' · '+(CN105_QUERIES[d[0]]||'未支援查詢 '+hex([d[0]]));f(5,1,'查詢代碼',CN105_QUERIES[d[0]]||'未知');f(6,15,'查詢保留資料',hex(d.slice(1)));if(!CN105_QUERIES[d[0]]||d.slice(1).some(n=>n))warnings.push('本模擬器尚未支援此查詢或參數');}

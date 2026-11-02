@@ -157,6 +157,16 @@ test('profile metadata cannot substitute another protocol formatter or inject ma
     assert.deepEqual((await app.inspect()).device,before);assert.match(app.element('notice').textContent,/protocol/);
   });
 
+test('clearing capture before a delayed reply retains the reply profile for later translation',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context),profile=structuredClone(PROFILES[0]);profile.replyDelay=20;profile.services.find(s=>s.id===0).name='自訂電源欄位';
+    app.element('import-profile').files=[{size:1000,text:async()=>JSON.stringify(profile)}];await app.fire('import-profile','change');
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;
+    await app.push([6,1,0,255,255,7]);app.fire('clear-log');
+    await new Promise(resolve=>setTimeout(resolve,80));assert.equal(app.writes.length,1);
+    app.fire('translator-load-capture');assert.match(app.element('translator-results').innerHTML,/自訂電源欄位/);
+  });
+
 test('S21 unspecified target renders blank with its wire sentinel and can be edited back to a temperature',
   {timeout:3000,concurrency:false},async context=>{
     const app=await appHarness(context);

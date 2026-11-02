@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {connectCN105,queryCN105,sampleSetCN105,CN105_PROFILE} from '../dist/cn105.js';
-import {hex} from '../dist/protocol.js';
+import {hex,frame} from '../dist/protocol.js';
 import {PROFILES} from '../dist/catalog.js';
 import {translateCapture} from '../dist/translator.js';
+import {connectX50A,queryX50A,sampleSetX50A,sampleFanX50A} from '../dist/x50a.js';
 
 let instance=0;
 const appUrl=new URL('../dist/app.js',import.meta.url);
@@ -145,6 +146,81 @@ test('imported TaiSEIA device remains selected after switching to S21 and back',
     app.element('protocol-mode').value='taiseia';app.fire('protocol-mode','change');
     assert.equal((await app.inspect()).device.saId,4);
     assert.equal((await app.inspect()).device.model,'IMPORTED-DH');
+  });
+
+test('X50A UART initialization, control readback and passive translator all use the selected device',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);
+    app.element('device-type').value='x50a';app.fire('device-type','change');
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;
+    assert.equal(app.opens[0].options.baudRate,9600);assert.equal(app.opens[0].options.parity,'even');assert.equal(app.opens[0].options.stopBits,1);
+    const init=connectX50A();await app.push(init.slice(0,3));assert.equal(app.writes.length,0);await app.push(init.slice(3));
+    assert.equal(hex(app.writes[0]),'06 AA 07 01 06 01 40');assert.equal(app.element('handshake-state').textContent,'已回覆 X50A 初始化');
+    await app.push(queryX50A(0xba));assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+    await app.push(sampleSetX50A());await app.push(sampleFanX50A());await app.push(queryX50A(0xca));
+    const state=await app.inspect();assert.deepEqual([0,1,2,3,4].map(id=>state.device.services.find(s=>s.id===id).raw),[1,2,3,245,7]);
+    assert.equal(app.writes.at(-1)[11],0x31);assert.equal(app.element('x50a-settings').hidden,false);assert.equal(app.element('send-status').hidden,true);
+    const writes=structuredClone(app.writes),before=await app.inspect();
+    app.fire('translation-sample-x50a');assert.equal(Number(app.element('translator-total').textContent),16);
+    assert.equal(Number(app.element('translator-invalid').textContent),0);assert.match(app.element('translator-results').innerHTML,/24.5 °C/);
+    assert.deepEqual(await app.inspect(),before);assert.deepEqual(app.writes,writes);
+  });
+
+test('X50A received under TaiSEIA UART is aligned before replying and queued commands survive',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context),connecting=app.connect();app.request.resolve(app.port);await connecting;
+    assert.equal(app.opens[0].options.parity,'none');
+    await app.push([...connectX50A(),...queryX50A(0xba)]);await settle();await settle();
+    assert.equal(app.opens.at(-1).options.parity,'even');assert.equal(app.opens.at(-1).options.baudRate,9600);
+    assert.equal(app.requestCount,1);assert.equal(app.writes.length,2);assert.equal(app.element('device-type').value,'x50a');
+    assert.notEqual(app.element('handshake-state').textContent,'握手流程完成（後續命令）','coalesced pre-reply commands cannot confirm a later controller response');
+    await app.push(queryX50A(0xca));
+    assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+  });
+
+test('UART alignment keeps a partial X50A tail until the next read chunk completes it',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context),connecting=app.connect();app.request.resolve(app.port);await connecting;
+    const query=queryX50A(0xba);await app.push([...connectX50A(),...query.slice(0,3)]);await settle();await settle();
+    assert.equal(app.writes.length,1);await app.push(query.slice(3));assert.equal(app.writes.length,2);
+    assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+  });
+
+test('automatic scan includes X50A 8E2 compatibility and preserves the working stop-bit variant',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context,{mockClock:true}),connecting=app.connect();app.request.resolve(app.port);await connecting;
+    for(const time of [4000,8000,12000,16000])await app.advanceTo(time);
+    assert.equal(app.opens.at(-1).options.baudRate,9600);assert.equal(app.opens.at(-1).options.parity,'even');assert.equal(app.opens.at(-1).options.stopBits,2);
+    await app.push(connectX50A());await app.push(queryX50A(0xba));
+    const opens=app.opens.length;await app.advanceTo(20000);assert.equal(app.opens.length,opens);
+    assert.equal(app.element('device-type').value,'x50a');assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+  });
+
+test('X50A offline demonstration is marked offline and never opens or writes a physical port',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('device-type').value='x50a';app.fire('device-type','change');app.fire('demo');
+    const info=await app.inspect();assert.equal(info.discovery.stage,'established');assert.equal(info.discovery.source,'離線');assert.equal(info.device.saId,'x50a');
+    assert.equal(info.counts.RX,9);assert.equal(info.counts.TX,9);assert.equal(info.counts.error,0);assert.equal(app.requestCount,0);assert.equal(app.writes.length,0);
+    assert.match(app.element('handshake-state').textContent,/離線示範/);assert.match(app.element('state-summary').innerHTML,/24.5 °C/);
+  });
+
+for(const [sa,id] of [[1,30],[4,24]])test('buzzer summary updates from actual receive handler and distinguishes disabled, FFFF and reset for SA '+sa,
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('device-type').value=String(sa);app.fire('device-type','change');
+    assert.match(app.element('state-summary').innerHTML,/id="buzzer-state"[^>]*>開啟/);
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;
+    await app.push(frame(sa,id|128,1));assert.match(app.element('state-summary').innerHTML,/id="buzzer-state"[^>]*>關閉/);
+    await app.push(frame(sa,id|128,0));assert.match(app.element('state-summary').innerHTML,/id="buzzer-state"[^>]*>開啟/);
+    app.element('unknown-'+id).checked=true;app.fire('unknown-'+id,'change');assert.match(app.element('state-summary').innerHTML,/未知（FFFF）/);
+    app.fire('reset-state');assert.match(app.element('state-summary').innerHTML,/id="buzzer-state"[^>]*>開啟/);
+  });
+
+test('all devices without a public buzzer mapping omit its summary',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);
+    for(const device of ['3','8','14','15','s21','cn105','x50a']){
+      app.element('device-type').value=device;app.fire('device-type','change');assert.doesNotMatch(app.element('state-summary').innerHTML,/蜂鳴器|buzzer-state/);
+    }
   });
 
 test('profile metadata cannot substitute another protocol formatter or inject markup into field labels',
@@ -332,7 +408,7 @@ test('automatic UART scanning times out at sixty seconds and never reopens after
       assert.equal(open.port,app.port);
       assert.deepEqual(
         [open.options.baudRate,open.options.dataBits,open.options.parity,open.options.stopBits],
-        [[9600,8,'none',1],[2400,8,'even',2],[2400,8,'even',1]][index%3],
+        [[9600,8,'none',1],[2400,8,'even',2],[2400,8,'even',1],[9600,8,'even',1],[9600,8,'even',2]][index%5],
       );
     }
     await app.advanceTo(59999);

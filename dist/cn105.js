@@ -1,6 +1,6 @@
 // Independently implemented device side of CN105 heat-pump profile 0x30.
 // Evidence and deliberately unsupported model extensions: docs/cn105.md.
-import {hex,signed} from './protocol.js?v=1.3.8';
+import {hex,signed} from './protocol.js?v=1.3.9';
 export const CN105_TYPES={65:'SET 寫入',66:'GET 查詢',90:'CONNECT 連線',91:'安裝模式連線（未模擬）',97:'SET ACK 寫入確認',98:'DATA 狀態回覆',122:'CONNECT ACK 連線回覆',123:'安裝模式回覆'};
 export const CN105_QUERIES={2:'設備設定',3:'室內外溫度／運轉時間',4:'故障狀態',6:'運轉狀態／功率／耗電',9:'運轉子狀態',66:'淨化／夜間／循環模式'};
 export const CN105_ENUMS={power:{0:'關',1:'開'},mode:{1:'暖房',2:'除濕',3:'冷房',7:'送風',8:'自動'},fan:{0:'自動',1:'靜音',2:'1',3:'2',5:'3',6:'4'},vane:{0:'自動',1:'最上',2:'上',3:'中',4:'下',5:'最下',7:'擺動'},wide:{1:'最左',2:'左',3:'中',4:'右',5:'最右',8:'左右分流',12:'擺動'}};

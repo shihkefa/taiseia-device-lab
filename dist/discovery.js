@@ -1,7 +1,8 @@
-import {checkFrame} from './protocol.js?v=1.3.8';
-import {checkS21,commandS21,ACK,NAK} from './s21.js?v=1.3.8';
-import {checkCN105,isCN105Request} from './cn105.js?v=1.3.8';
-export const SERIAL_PRESETS={taiseia:{baudRate:9600,dataBits:8,parity:'none',stopBits:1},s21:{baudRate:2400,dataBits:8,parity:'even',stopBits:2},cn105:{baudRate:2400,dataBits:8,parity:'even',stopBits:1}};
+import {checkFrame} from './protocol.js?v=1.3.9';
+import {checkS21,commandS21,ACK,NAK} from './s21.js?v=1.3.9';
+import {checkCN105,isCN105Request} from './cn105.js?v=1.3.9';
+import {checkX50A,isX50ARequest} from './x50a.js?v=1.3.9';
+export const SERIAL_PRESETS={taiseia:{baudRate:9600,dataBits:8,parity:'none',stopBits:1},s21:{baudRate:2400,dataBits:8,parity:'even',stopBits:2},cn105:{baudRate:2400,dataBits:8,parity:'even',stopBits:1},x50a:{baudRate:9600,dataBits:8,parity:'even',stopBits:1},'x50a-e2':{baudRate:9600,dataBits:8,parity:'even',stopBits:2}};
 const SA_IDS=[1,3,4,8,14,15];
 export function isTaiRequest(b){return b.length===6&&checkFrame(b)&&(b[1]===0?b[2]<=8&&b[2]!==3&&b[3]===255&&b[4]===255:SA_IDS.includes(b[1])&&(b[2]&127)!==127&&((b[2]&128)!==0||(b[3]===255&&b[4]===255)));}
 export function isS21Request(b){return checkS21(b)&&(/^[FDR][A-Za-z0-9]$/.test(commandS21(b))||['M','V','VS000M'].includes(commandS21(b)));}
@@ -21,6 +22,16 @@ export class DiscoveryParser {
     const events=[];
     while(this.buffer.length){
       const first=this.buffer[0],allowS21=['auto','s21'].includes(this.protocol),allowTai=['auto','taiseia'].includes(this.protocol);
+      // X50A also starts with 06, but byte 2 is its length. Its command byte
+      // occupies a different namespace from a TaiSEIA SA and S21's bare ACK.
+      if(['auto','x50a'].includes(this.protocol)&&first===6&&(this.protocol==='x50a'||this.buffer.length>=2&&this.buffer[1]>=0x80)){
+        const length=this.buffer.length>=3?this.buffer[2]:null;
+        if(length!==null&&length<6||this.buffer.length>=4&&this.buffer[3]!==1){events.push({type:'error',protocol:'x50a',bytes:this.buffer.splice(0,1),reason:'X50A 標頭／長度不符；重新同步'});continue;}
+        if(length===null||this.buffer.length<length){if(!stale)break;events.push({type:'error',protocol:'x50a',bytes:this.buffer.splice(0,1),reason:'X50A 殘包逾時；重新同步'});continue;}
+        const bytes=Uint8Array.from(this.buffer.slice(0,length));
+        if(!checkX50A(bytes)){events.push({type:'error',protocol:'x50a',bytes:this.buffer.splice(0,1),reason:'X50A checksum 不符；重新同步'});continue;}
+        this.buffer.splice(0,length);if(this.protocol==='auto'&&isX50ARequest(bytes))this.protocol='x50a';events.push({type:'frame',protocol:'x50a',bytes});continue;
+      }
       if(['auto','cn105'].includes(this.protocol)&&first===0xfc){
         const length=this.buffer.length>=5?this.buffer[4]+6:null;
         if(this.buffer.length>=4&&(this.buffer[2]!==1||this.buffer[3]!==0x30)||length>70){events.push({type:'error',protocol:'cn105',bytes:this.buffer.splice(0,1),reason:'CN105 標頭／長度不符；重新同步'});continue;}
@@ -36,7 +47,7 @@ export class DiscoveryParser {
         // A stray S21 STX must not eat a complete request from another family.
         // Test the current full frame first, so binary payload is not resliced.
         if(this.protocol==='auto'&&(end<0||!checkS21(this.buffer.slice(0,end+1)))){
-          const next=this.buffer.findIndex((b,i)=>i>0&&(b===0xfc&&i+5<=this.buffer.length&&isCN105Request(this.buffer.slice(i,i+6+this.buffer[i+4]))||b===6&&isTaiRequest(this.buffer.slice(i,i+6))));
+          const next=this.buffer.findIndex((b,i)=>i>0&&(b===0xfc&&i+5<=this.buffer.length&&isCN105Request(this.buffer.slice(i,i+6+this.buffer[i+4]))||b===6&&(isTaiRequest(this.buffer.slice(i,i+6))||i+3<=this.buffer.length&&isX50ARequest(this.buffer.slice(i,i+this.buffer[i+2])))));
           if(next>0){events.push({type:'error',protocol:'auto',bytes:this.buffer.splice(0,next),reason:'前導 STX 與後續協議不符；保留完整有效控制器命令'});continue;}
         }
         const restart=this.buffer.indexOf(2,1);
@@ -63,19 +74,25 @@ export class DiscoveryParser {
 // No serial open, bare ACK or TX completion alone can establish a handshake.
 export class DiscoverySession {
   #cn105Followups=new WeakSet();
+  #x50aFollowups=new WeakSet();
   constructor(options={}){this.reset(options);}
   reset({protocol='auto',deviceId=1,autoDevice=true}={}){
     this.configuredProtocol=protocol;this.protocol=null;this.deviceId=deviceId;this.autoDevice=autoDevice;
     this.deviceBasis='selected';this.declared=false;this.identitySent=false;this.pending=null;
     this.stage='waiting';this.evidence='等待有效控制器命令';this.lastRx=null;this.confirmedAt=null;
     this.#cn105Followups=new WeakSet();
+    this.#x50aFollowups=new WeakSet();
   }
   observe(protocol,bytes,now=performance.now()){
-    if(!['s21','taiseia','cn105'].includes(protocol)||(protocol==='cn105'&&!isCN105Request(bytes))||(protocol==='s21'&&!isS21Request(bytes))||(protocol==='taiseia'&&!isTaiRequest(bytes)))return {accepted:false,reason:'不是可辨識的控制器命令'};
+    if(!['s21','taiseia','cn105','x50a'].includes(protocol)||(protocol==='x50a'&&!isX50ARequest(bytes))||(protocol==='cn105'&&!isCN105Request(bytes))||(protocol==='s21'&&!isS21Request(bytes))||(protocol==='taiseia'&&!isTaiRequest(bytes)))return {accepted:false,reason:'不是可辨識的控制器命令'};
     if(this.configuredProtocol!=='auto'&&protocol!==this.configuredProtocol||this.protocol&&protocol!==this.protocol)return {accepted:false,reason:'協議與已鎖定連線不符'};
     this.protocol=protocol;
     let changed=false;
-    if(protocol==='cn105'){
+    if(protocol==='x50a'){
+      changed=this.deviceId!=='x50a';this.deviceId='x50a';this.deviceBasis='x50a-family';
+      if(bytes[1]===0xaa){this.#x50aFollowups=new WeakSet();this.identitySent=false;this.confirmedAt=null;this.stage='detected';this.evidence='收到 X50A AA 初始化，等待就緒回覆';}
+      else if(this.identitySent&&now-this.identitySent.at<=10000)this.#x50aFollowups.add(bytes);
+    }else if(protocol==='cn105'){
       changed=this.deviceId!=='cn105';this.deviceId='cn105';this.deviceBasis='cn105-family';
       if([0x5a,0x5b].includes(bytes[1])){this.#cn105Followups=new WeakSet();this.identitySent=false;this.confirmedAt=null;this.stage='detected';this.evidence='收到 CN105 連線請求；尚未送出回覆';}
       else if(this.identitySent&&now-this.identitySent.at<=10000){this.#cn105Followups.add(bytes);if(this.confirmedAt===null)this.evidence='已收到 CN105 後續 GET／SET，等待支援的命令成功回覆';}
@@ -94,7 +111,12 @@ export class DiscoverySession {
     return {accepted:true,changed,deviceId:this.deviceId};
   }
   sent(protocol,request,response,now=performance.now()){
-    if(protocol==='cn105'){
+    if(protocol==='x50a'){
+      if(!checkX50A(response)||response[4]!==6||request[1]!==response[1])return;
+      if(request[1]===0xaa&&response.length===7&&response[5]===1){this.identitySent={at:now};this.stage='identity-sent';this.evidence='已送出 X50A AA 就緒回覆，等待控制器後續查詢';}
+      else if(this.#x50aFollowups.has(request)){this.#x50aFollowups.delete(request);this.stage='established';this.confirmedAt=now;this.evidence='已完成 AA → 就緒回覆 → 控制器後續命令 → 對應狀態回覆；X50A 無獨立 ACK';}
+      else if(this.confirmedAt===null){this.stage='responding';this.evidence='已回覆 X50A 命令；尚未觀察到完整初始化流程';}
+    }else if(protocol==='cn105'){
       if(request[1]===0x5a&&response[1]===0x7a){this.identitySent={at:now};this.stage='identity-sent';this.evidence='已送出 CN105 7A 連線回覆，等待控制器後續 GET／SET 確認';}
       else if(this.#cn105Followups.has(request)&&checkCN105(response)&&((request[1]===0x42&&response[1]===0x62&&request[5]===response[5])||(request[1]===0x41&&response[1]===0x61))){this.#cn105Followups.delete(request);this.stage='established';this.confirmedAt=now;this.evidence='已完成 CONNECT → 7A → 後續 GET／SET → 62／61 回覆；CN105 無控制器 ACK';}
       else if(this.confirmedAt===null){this.stage='responding';this.evidence='已回覆 CN105 查詢／寫入，尚未觀察到完整 CONNECT 流程';}

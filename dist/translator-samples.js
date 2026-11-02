@@ -1,5 +1,5 @@
 // Synthetic TaiSEIA examples, not hardware captures. Each SA has its own IDs.
-import {frame,hex} from './protocol.js?v=1.3.8';
+import {frame,hex} from './protocol.js?v=1.3.9';
 const examples={
   1:{name:'空調',read:[3,26],write:[0,1],status:[[0,1],[3,26],[4,28],[36,23]]},
   3:{name:'洗衣機',read:[2,10],write:[0,1],status:[[0,1],[2,10],[26,23],[30,123]]},

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {ACK,S21_PROFILE,S21Engine,ascii,checksumS21,frameS21,checkS21,commandS21,validateS21Profile,validateS21Value,displayS21Value} from '../dist/s21.js';
+import {ACK,S21_PROFILE,S21Engine,ascii,checksumS21,frameS21,checkS21,commandS21,decodeS21,validateS21Profile,validateS21Value,displayS21Value} from '../dist/s21.js';
 import {hex,parseHex} from '../dist/protocol.js';
 
 // Independently calculated vectors using the public asund / RevK mappings,
@@ -88,6 +88,12 @@ test('query emits ACK before reply; D1 emits only ACK and readback reflects all 
   assert.equal(written.changes.length,4);
   const queried=e.handle(F1);
   assert.equal(queried.accepted,true);assert.deepEqual(queried.responses,[Uint8Array.of(ACK),G1]);
+});
+
+test('packet monitor shows logical fan speeds rather than S21 ASCII wire codes',()=>{
+  // COM10 actually received fan-1 D1 and read back G1 with the same raw 33.
+  for(const wire of ['02 44 31 31 33 48 33 54 03','02 47 31 31 33 48 33 57 03'])assert.match(decodeS21(parseHex(wire)),/風速 1 · DATA/);
+  for(const [raw,label] of [[0x34,'2'],[0x35,'3'],[0x36,'4'],[0x37,'5'],[0x41,'自動 A'],[0x42,'靜音 B']])assert.ok(decodeS21(frameS21('G1',[49,51,72,raw])).includes('風速 '+label+' · DATA'));
 });
 
 test('D1 validates the complete command before changing any state',()=>{

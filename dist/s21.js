@@ -133,7 +133,7 @@ export function decodeS21(b){
   if(!checkS21(b))return 'S21 checksum／框架錯誤';
   const cmd=commandS21(b),query=['G','S'].includes(cmd[0])?String.fromCharCode(cmd.charCodeAt(0)-1)+cmd[1]:cmd;
   const data=Array.from(b.slice(3,-2));let values='';
-  if(['G1','D1'].includes(cmd)&&data.length===4)values=`電源 ${data[0]-48} / 模式 ${data[1]-48} / ${data[2]===0x80?'未指定／不適用 (80)':`${(data[2]-28)/2} °C`} / 風速 ${String.fromCharCode(data[3])}`;
+  if(['G1','D1'].includes(cmd)&&data.length===4)values=`電源 ${data[0]-48} / 模式 ${data[1]-48} / ${data[2]===0x80?'未指定／不適用 (80)':`${(data[2]-28)/2} °C`} / 風速 ${S21_PROFILE.services.find(s=>s.id===2).enum[data[3]]||'未知 '+hex([data[3]])}`;
   else if(['G5','D5'].includes(cmd)&&data.length===4)values=`擺風 ${data[0]-48}`;
   else if(['SH','SI','Sa'].includes(cmd)&&data.length===4&&data.slice(0,3).every(b=>b>=48&&b<=57)&&[43,45].includes(data[3]))values=`${Number(String.fromCharCode(...data.slice(0,3).reverse()))*(data[3]===45?-1:1)/10} °C`;
   else if(['SL','Sd','Se'].includes(cmd)&&data.length===3&&data.every(b=>b>=48&&b<=57))values=`${Number(String.fromCharCode(...data.slice().reverse()))*(cmd==='SL'?10:1)} ${cmd==='SL'?'RPM':cmd==='Sd'?'Hz':'%'}`;

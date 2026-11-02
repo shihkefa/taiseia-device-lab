@@ -14,7 +14,7 @@ export function checkS21(b){return b.length>=4&&b.length<=131&&b[0]===2&&b.at(-1
 export function commandS21(b){return [77,86].includes(b[1])?String.fromCharCode(...b.slice(1,-2)):String.fromCharCode(...b.slice(1,3));}
 export function validateS21Value(s,raw){if(raw===65535&&(s.unavailableWire===0x80||s.signed&&s.min<=-1&&s.max>=-1))return null;if(raw===65535)return '數值超出範圍';return validateValue(s,raw,{local:true});}
 export function displayS21Value(s,raw){if(raw===65535&&s.unavailableWire===0x80)return '未指定／不適用 (80)';if(raw===65535&&s.signed)return `${-s.scale}${s.unit?' '+s.unit:''}`;return displayValue(s,raw);}
-export const S21_COMMANDS={F1:'電源／模式／溫度／風速',D1:'設定電源／模式／溫度／風速',F5:'擺風',D5:'設定擺風',F6:'特殊模式',D6:'設定特殊模式',F7:'節能／需求限制',D7:'設定節能／需求限制',F8:'協定版本（v2）',F9:'室內外溫度（0.5°C）',FC:'模擬型號代碼',FM:'累積耗電',RH:'室內溫度',RI:'盤管溫度',Ra:'室外溫度',RL:'風扇轉速',Rd:'壓縮機頻率',Re:'室內濕度'};
+export const S21_COMMANDS={D2:'相容啟動命令（單一 30；只回 ACK）',F1:'電源／模式／溫度／風速',D1:'設定電源／模式／溫度／風速',F5:'擺風',D5:'設定擺風',F6:'特殊模式',D6:'設定特殊模式',F7:'節能／需求限制',D7:'設定節能／需求限制',F8:'協定版本（v2）',F9:'室內外溫度（0.5°C）',FC:'模擬型號代碼',FM:'累積耗電',RH:'室內溫度',RI:'盤管溫度',Ra:'室外溫度',RL:'風扇轉速',Rd:'壓縮機頻率',Re:'室內濕度'};
 const SOURCE='asund S21 / RevK Faikout 公開程式；機型可有差異';
 function field(id,name,raw,min,max,extra={}){return {id,name,raw,min,max,scale:1,enum:null,signed:false,enabled:true,writable:false,unit:'',capability:0,confidence:'公開 S21 v2 映射',rangeBasis:'模擬設定範圍，非全機型保證',source:SOURCE,capabilityBasis:'S21 無 TaiSEIA 能力值',...extra};}
 const toggle=(id,name,command)=>field(id,name,0,0,1,{command,writable:true,enum:{0:'關',1:'開'}});
@@ -67,6 +67,12 @@ export class S21Engine {
     if(!checkS21(b))return {accepted:false,responses:[],reason:'S21 checksum／框架不符；不執行'};
     const cmd=commandS21(b),data=Array.from(b.slice(3,-2));
     if(['M','V','VS000M'].includes(cmd))return this.reject(`${cmd} 未支援；本設定為 S21 v2 子集`);
+    // D2 is a one-character stub sent by some controllers before polling F1.
+    // It is not a four-byte state setter and must not alter F2 capabilities.
+    if(cmd==='D2'){
+      if(data.length!==1||data[0]!==0x30)return this.reject('D2 相容啟動命令需要單一 ASCII 0（30）');
+      return {accepted:true,responses:[Uint8Array.of(ACK)],changes:[],reason:'D2 相容啟動命令 · 已回 ACK；不修改設備狀態，等待後續查詢確認'};
+    }
     if(cmd[0]==='D'){
       if(data.length!==4)return this.reject(`${cmd} 資料長度錯誤（需要 4 bytes）`);
       let values;

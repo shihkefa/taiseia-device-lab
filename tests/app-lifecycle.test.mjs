@@ -368,6 +368,17 @@ test('CN105 automatic scan selects 2400 8E1, responds through UART and confirms 
     await app.fire('disconnect');assert.equal(app.element('handshake-state').textContent,'等待命令');
   });
 
+test('physical S21 D2 startup ACK permits F1 polling but cannot confirm a handshake alone',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('protocol-mode').value='s21';app.fire('protocol-mode','change');
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;
+    await app.push([2,68,50,48,166,3]);assert.deepEqual(app.writes,[[6]]);assert.equal((await app.inspect()).discovery.confirmedAt,null);
+    assert.equal(app.element('handshake-state').textContent,'已回覆，待確認');
+    await app.push([2,70,49,119,3]);assert.equal(app.writes[1][0],6);assert.equal(app.writes[1][2],71);
+    await app.push([6]);assert.equal(app.element('handshake-state').textContent,'握手已確認（ACK）');
+    app.element('translator-input').value='RX: 02 44 32 30 A6 03';app.fire('translator-run');assert.match(app.element('translator-results').innerHTML,/ACK-only/);
+  });
+
 test('a CN105 frame decoded at the S21 UART preset is queued until TX framing is corrected',
   {timeout:3000,concurrency:false},async context=>{
     const app=await appHarness(context,{mockClock:true}),connecting=app.connect();app.request.resolve(app.port);await connecting;await app.advanceTo(4000);

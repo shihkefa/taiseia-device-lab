@@ -17,6 +17,15 @@ const setRaw=(profile,id,raw)=>{profile.services.find(s=>s.id===id).raw=raw;};
 const replies=result=>result.responses.map(hex);
 const data=result=>Array.from(result.responses[1].slice(3,-2));
 
+test('COM10 captured D2 startup takes one ASCII 0 and ACKs without mutating state or F2',()=>{
+  const e=new S21Engine(),before=structuredClone(e.profile),captured=parseHex('02 44 32 30 A6 03');
+  assert(checkS21(captured));assert.equal(hex(frameS21('D2','0')),hex(captured));
+  const r=e.handle(captured);assert(r.accepted);assert.deepEqual(replies(r),['06']);assert.deepEqual(e.profile,before);
+  for(const bytes of [[],[49],[48,48,48,48]]){const rejected=e.handle(frameS21('D2',bytes));assert.equal(rejected.accepted,false);assert.deepEqual(replies(rejected),['15']);assert.deepEqual(e.profile,before);}
+  const bad=Uint8Array.from(captured);bad[4]^=1;assert.equal(e.handle(bad).responses.length,0);
+  assert.equal(e.handle(F1).responses.length,2);
+});
+
 test('S21 F1 and D1 vectors have checksum over command and payload only',()=>{
   assert.deepEqual(frameS21('F1'),F1);
   assert.deepEqual(frameS21('D1',[0x31,0x33,0x4e,0x41]),D1);

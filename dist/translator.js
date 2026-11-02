@@ -139,7 +139,11 @@ function decodeS21Packet(b,options,p,field,warn){
   function value(index,length,label,text){field(start+index,length,label,text);}
   const mode=S21_PROFILE.services.find(s=>s.id===1).enum,fan=S21_PROFILE.services.find(s=>s.id===2).enum;
   if(cmd.length===2&&['F','R'].includes(cmd[0])){interpreted=true;p.summary+= ' · 控制器查詢';if(data.length)warn('此 v2 查詢通常不含 payload；額外資料保留原樣。');if(!Object.hasOwn(S21_COMMANDS,query))warn('可辨識查詢格式；功能旗標或機型語意未在此轉譯表完整定義。');}
-  else if(['D1','G1'].includes(cmd)&&expected(4)){
+  else if(cmd==='D2'&&expected(1)){
+    interpreted=true;value(0,1,'D2 相容值',data[0]===0x30?'ASCII 0（30）；只需 ACK，不修改設備設定':'未支援的原始值 '+hex(data));p.summary='S21 D2 · 相容啟動命令／stub · ACK-only';
+    if(data[0]!==0x30)warn('已知 D2 相容值為單一 ASCII 0（30）。');
+    warn('D2 實際功能未確認；不當作 F2 能力寫入，也不能單憑 ACK 判定完整握手。');
+  }else if(['D1','G1'].includes(cmd)&&expected(4)){
     interpreted=true;const power=data[0]===48?'關機':data[0]===49?'開機':`未知電源 ${hex([data[0]])}`,m=mode[data[1]-48]||`未知模式 ${hex([data[1]])}`,f=fan[data[3]]||`未知風速 ${hex([data[3]])}`,t=(data[2]-28)/2;
     const target=data[2]===0x80?'未指定／不適用 (80)':`${t} °C`;
     value(0,1,'電源',power);value(1,1,'模式',m);value(2,1,'設定溫度',data[2]===0x80?target:`${target} = (0x${hex([data[2]])} − 28) / 2`);value(3,1,'風速',f);

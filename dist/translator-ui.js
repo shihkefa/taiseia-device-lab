@@ -1,6 +1,6 @@
-import {connectCN105,queryCN105,sampleSetCN105,CN105Engine} from './cn105.js';
-import {PROFILES} from './catalog.js';
-import {translateText,translateCapture,translationText} from './translator.js';
+import {connectCN105,queryCN105,sampleSetCN105,CN105Engine} from './cn105.js?v=1.3.7';
+import {PROFILES} from './catalog.js?v=1.3.7';
+import {translateText,translateCapture,translationText} from './translator.js?v=1.3.7';
 const $=id=>document.getElementById(id);
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const SAMPLES={

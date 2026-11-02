@@ -37,6 +37,22 @@ test('invalid values, unknown flags, unsupported profiles, echoes and corrupted 
     const r=e.handle(b);assert.equal(r.accepted,false);assert.equal(r.responses.length,0);assert.deepEqual(e.profile,before);
   }
 });
+test('captured legacy FF full-setting frames apply known fields atomically and reject nonzero extensions',()=>{
+  const e=new CN105Engine();
+  for(const [wire,power] of [
+    ['FC 41 01 30 10 01 FF 00 00 03 08 03 01 00 00 00 00 00 00 00 00 6F',0],
+    ['FC 41 01 30 10 01 FF 00 01 03 08 03 01 00 00 00 00 00 00 00 00 6E',1],
+  ]){
+    const b=parseHex(wire),r=e.handle(b);assert.equal(r.accepted,true);assert.equal(hex(r.responses[0]),ack);
+    assert.deepEqual([e.value(0),e.value(1),e.value(3),e.value(2),e.value(4),e.value(5)],[power,3,46,3,1,3]);
+    const decoded=decodePacket(b);assert.match(decoded.warnings.join(' '),/高位旗標語意未確認/);
+  }
+  const before=structuredClone(e.profile);
+  for(const fields of [{1:255,8:1},{1:255,14:176},{1:255,2:1},{1:255,6:4},{1:254}]){
+    const r=e.handle(frameCN105(0x41,payload(1,{3:1,4:3,5:8,6:3,7:1,...fields})));assert.equal(r.accepted,false);assert.deepEqual(r.responses,[]);assert.deepEqual(e.profile,before);
+  }
+});
+
 test('remote temperature accepts modern and legacy encoding and disable restores local sensor',()=>{
   const e=new CN105Engine();assert(e.handle(frameCN105(0x41,payload(7,{1:1,3:173}))).accepted);
   assert.equal(e.value(31),45);assert.equal(e.handle(queryCN105(3)).responses[0][11],173);

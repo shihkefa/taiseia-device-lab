@@ -1,6 +1,6 @@
 // Independently implemented device side of CN105 heat-pump profile 0x30.
 // Evidence and deliberately unsupported model extensions: docs/cn105.md.
-import {hex,signed} from './protocol.js';
+import {hex,signed} from './protocol.js?v=1.3.7';
 export const CN105_TYPES={65:'SET 寫入',66:'GET 查詢',90:'CONNECT 連線',91:'安裝模式連線（未模擬）',97:'SET ACK 寫入確認',98:'DATA 狀態回覆',122:'CONNECT ACK 連線回覆',123:'安裝模式回覆'};
 export const CN105_QUERIES={2:'設備設定',3:'室內外溫度／運轉時間',4:'故障狀態',6:'運轉狀態／功率／耗電',9:'運轉子狀態',66:'淨化／夜間／循環模式'};
 export const CN105_ENUMS={power:{0:'關',1:'開'},mode:{1:'暖房',2:'除濕',3:'冷房',7:'送風',8:'自動'},fan:{0:'自動',1:'靜音',2:'1',3:'2',5:'3',6:'4'},vane:{0:'自動',1:'最上',2:'上',3:'中',4:'下',5:'最下',7:'擺動'},wide:{1:'最左',2:'左',3:'中',4:'右',5:'最右',8:'左右分流',12:'擺動'}};
@@ -17,6 +17,9 @@ export const queryCN105=code=>frameCN105(0x42,[code,...Array(15).fill(0)]);
 // COM10 uses this modifier on both settings and room-temperature queries.
 // Its semantics are unconfirmed; return the existing data for known codes.
 export const isCompatibleCN105Get=d=>d.length===16&&Object.hasOwn(CN105_QUERIES,d[0])&&d[1]===1&&d.slice(2).every(n=>n===0);
+// Captured legacy full-setting form. Only its five known low-bit fields are
+// applied; unknown high flags require the observed zero extension bytes.
+export const isCompatibleCN105FullSet=d=>d.length===16&&d[0]===1&&d[1]===255&&d[2]===0&&d.slice(8).every(n=>n===0);
 export const sampleSetCN105=()=>frameCN105(0x41,[1,0x1f,1,1,3,0,5,7,0,0,0,0,0,12,177,0]);
 const field=(id,name,raw,min,max,extra={})=>({id,name,raw,min,max,protocol:'cn105',scale:1,unit:'',enum:null,signed:false,enabled:true,writable:false,command:'CN105',confidence:'公開 CN105 映射',rangeBasis:'模擬範圍，非所有機型的能力保證',source:'echavet/MitsubishiCN105ESPHome',...extra});
 const toggle=(id,name,command,writable=false)=>field(id,name,0,0,1,{command,writable,enum:CN105_ENUMS.power});
@@ -62,7 +65,7 @@ export function cn105WriteValues(d){
   if(d.length!==16)throw Error('SET payload 需要 16 bytes');
   const values=[];
   if(d[0]===1){
-    if(d[1]&~0x1f||d[2]&~1)throw Error('未支援的 SET 01 旗標');
+    if((d[1]&~0x1f&&!isCompatibleCN105FullSet(d))||d[2]&~1)throw Error('未支援的 SET 01 旗標');
     for(const [mask,offset,id] of [[1,3,0],[2,4,1],[8,6,2],[16,7,4]])if(d[1]&mask)values.push([id,d[offset]]);
     if(d[1]&4){if(d[14]===0x80)throw Error('溫度旗標開啟，但新溫度為未指定 80');if(!d[14]&&d[5]>15)throw Error('未支援的傳統溫度代碼');values.push([3,d[14]?d[14]-128:2*(31-d[5])]);}
     if(d[2]&1){if(d[13]&0x70)throw Error('未支援的左右風向高位旗標');values.push([5,d[13]&15]);}
@@ -124,6 +127,7 @@ export function inspectCN105(b){
   else if(valid&&type===0x41&&d.length===16){
     f(5,1,'SET 子命令',hex([d[0]]));f(6,2,'更新旗標／遠端室溫資料',hex(d.slice(1,3)));
     try{const values=cn105WriteValues(d);summary+=' · '+(values.map(([id,n])=>{const s=CN105_PROFILE.services.find(s=>s.id===id);return s.name+' '+displayCN105Value(s,n);}).join(' / ')||'無更新欄位');
+      if(isCompatibleCN105FullSet(d))warnings.push('現場 FF 全欄位相容寫入：只套用低五位已知欄位；高位旗標語意未確認，延伸資料必須全零');
       f(8,13,'SET payload',hex(d.slice(3)));for(const [id,n] of values){const offset=d[0]===1?({0:3,1:4,2:6,3:d[14]?14:5,4:7,5:13})[id]:d[0]===7?id===30?1:d[3]?3:2:({32:12,33:13,34:14})[id];sf(offset,id,n);}
     }catch(e){warnings.push(e.message);f(8,13,'原始 SET 資料',hex(d.slice(3)));}
   }else if(valid&&type===0x62&&d.length===16){

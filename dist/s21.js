@@ -1,6 +1,6 @@
 // Independent S21 v2 device implementation. Evidence: asund/esphome-daikin-s21
 // 30239f5 and RevK/Faikout 202b9ef (see docs/s21.md). No v3 support advertised.
-import {hex, signed, validateValue, displayValue} from './protocol.js';
+import {hex, signed, validateValue, displayValue} from './protocol.js?v=1.3.7';
 export const ACK=0x06, NAK=0x15;
 // Exact observed compatibility forms: local COM10 30 5D, RevK wiki 31.
 // D4 semantics are unconfirmed; ACK does not represent a state change.

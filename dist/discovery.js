@@ -1,6 +1,6 @@
-import {checkFrame} from './protocol.js';
-import {checkS21,commandS21,ACK,NAK} from './s21.js';
-import {checkCN105,isCN105Request} from './cn105.js';
+import {checkFrame} from './protocol.js?v=1.3.7';
+import {checkS21,commandS21,ACK,NAK} from './s21.js?v=1.3.7';
+import {checkCN105,isCN105Request} from './cn105.js?v=1.3.7';
 export const SERIAL_PRESETS={taiseia:{baudRate:9600,dataBits:8,parity:'none',stopBits:1},s21:{baudRate:2400,dataBits:8,parity:'even',stopBits:2},cn105:{baudRate:2400,dataBits:8,parity:'even',stopBits:1}};
 const SA_IDS=[1,3,4,8,14,15];
 export function isTaiRequest(b){return b.length===6&&checkFrame(b)&&(b[1]===0?b[2]<=8&&b[2]!==3&&b[3]===255&&b[4]===255:SA_IDS.includes(b[1])&&(b[2]&127)!==127&&((b[2]&128)!==0||(b[3]===255&&b[4]===255)));}

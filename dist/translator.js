@@ -1,8 +1,8 @@
 // Passive analysis only: never constructs a device engine or accesses a serial port.
-import {PROFILES} from './catalog.js';
-import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js';
-import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS,isCompatibleS21D4} from './s21.js';
-import {checkCN105,checksumCN105,inspectCN105} from './cn105.js';
+import {PROFILES} from './catalog.js?v=1.3.7';
+import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js?v=1.3.7';
+import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS,isCompatibleS21D4} from './s21.js?v=1.3.7';
+import {checkCN105,checksumCN105,inspectCN105} from './cn105.js?v=1.3.7';
 const names=new Map(PROFILES.map(p=>[p.saId,p.name]));
 const printable=bytes=>Array.from(bytes,b=>b>=32&&b<=126?String.fromCharCode(b):`\\x${b.toString(16).padStart(2,'0')}`).join('');
 const limits={bytes:65536,packets:2000,text:1000000};

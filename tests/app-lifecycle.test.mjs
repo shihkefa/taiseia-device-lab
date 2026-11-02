@@ -379,6 +379,8 @@ test('physical CN105 extra-01 settings query completes response flow and SET is 
     await app.push(sampleSetCN105());assert.equal(app.writes.at(-1)[1],0x61);await app.push(q);
     const d=app.writes.at(-1).slice(5,-1);assert.deepEqual([d[3],d[4],d[6],d[7],d[10],d[11]],[1,3,5,7,12,177]);
     const state=await app.inspect();assert.equal(state.device.services.find(s=>s.id===0).raw,1);assert.equal(state.device.services.find(s=>s.id===3).raw,49);
+    await app.push([252,65,1,48,16,1,255,0,1,3,8,3,1,0,0,0,0,0,0,0,0,110]);assert.equal(app.writes.at(-1)[1],0x61);
+    await app.push(q);assert.deepEqual([app.writes.at(-1)[8],app.writes.at(-1)[10],app.writes.at(-1)[11],app.writes.at(-1)[12],app.writes.at(-1)[16]],[1,8,3,1,174]);
   });
 
 test('physical S21 D2 startup ACK permits F1 polling but cannot confirm a handshake alone',

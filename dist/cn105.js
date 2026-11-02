@@ -1,6 +1,6 @@
 // Independently implemented device side of CN105 heat-pump profile 0x30.
 // Evidence and deliberately unsupported model extensions: docs/cn105.md.
-import {hex,signed} from './protocol.js?v=1.3.7';
+import {hex,signed} from './protocol.js?v=1.3.8';
 export const CN105_TYPES={65:'SET 寫入',66:'GET 查詢',90:'CONNECT 連線',91:'安裝模式連線（未模擬）',97:'SET ACK 寫入確認',98:'DATA 狀態回覆',122:'CONNECT ACK 連線回覆',123:'安裝模式回覆'};
 export const CN105_QUERIES={2:'設備設定',3:'室內外溫度／運轉時間',4:'故障狀態',6:'運轉狀態／功率／耗電',9:'運轉子狀態',66:'淨化／夜間／循環模式'};
 export const CN105_ENUMS={power:{0:'關',1:'開'},mode:{1:'暖房',2:'除濕',3:'冷房',7:'送風',8:'自動'},fan:{0:'自動',1:'靜音',2:'1',3:'2',5:'3',6:'4'},vane:{0:'自動',1:'最上',2:'上',3:'中',4:'下',5:'最下',7:'擺動'},wide:{1:'最左',2:'左',3:'中',4:'右',5:'最右',8:'左右分流',12:'擺動'}};
@@ -115,11 +115,18 @@ export class CN105Engine{
 export function decodeCN105(b){return inspectCN105(b).summary;}
 // Shared passive field decoder for capture detail and text/JSON translation.
 export function inspectCN105(b){
-  const fields=[],warnings=[];const f=(offset,length,label,value)=>fields.push({offset,length,raw:hex(b.slice(offset,offset+length)),label,value:String(value)});
+  const fields=[],warnings=[];const f=(offset,length,label,value)=>{const raw=b.slice(offset,Math.min(b.length,offset+length));if(raw.length)fields.push({offset,length:raw.length,raw:hex(raw),label,value:String(value)});};
   const valid=checkCN105(b),type=b[1],d=Array.from(b.slice(5,-1));
   let summary='CN105 '+(CN105_TYPES[type]||'未知類型 0x'+hex([type??0]));
   f(0,1,'起始碼','FC');if(b.length>1)f(1,1,'TYPE',CN105_TYPES[type]||'未知類型');if(b.length>=4)f(2,2,'標頭／設備族',b[2]===1&&b[3]===0x30?'01 30 · 三菱電機空調族；不含型號':'非支援的 01 30 空調標頭');if(b.length>=5)f(4,1,'LEN',`${b[4]} payload bytes；實際總長 ${b.length}`);
   if(!valid)warnings.push('框架、標頭、長度或 checksum 不符；只顯示原始資料');
+  if(valid){
+    if(!Object.hasOwn(CN105_TYPES,type))warnings.push('未知 CN105 TYPE；保留原始資料，未確認其功能');
+    const expectedLength=({65:16,66:16,90:2,97:16,98:16,122:1})[type];
+    if(expectedLength!==undefined&&d.length!==expectedLength)warnings.push(`此 CN105 類型的 payload 長度應為 ${expectedLength} bytes，實際 ${d.length}；校驗通過不代表命令格式有效`);
+    if(type===0x7a&&d.length===1&&d[0]!==0)warnings.push('CONNECT ACK 含未收錄的回覆值；保留原始值，不推定連線成功');
+    if(type===0x61&&d.length===16&&d.some(n=>n!==0))warnings.push('SET ACK 含非零資料，其額外語意尚未確認；保留原始值');
+  }
   const sf=(offset,id,raw)=>{const s=CN105_PROFILE.services.find(s=>s.id===id),invalid=validateCN105Value(s,raw&65535);f(5+offset,1,s.name,invalid?'未定義原始值 '+raw:displayCN105Value(s,raw&65535));if(invalid)warnings.push(s.name+' 超出參考映射；需依機型確認');};
   if(valid&&[0x5a,0x5b].includes(type)){f(5,d.length,'連線資料',hex(d));if(!isCN105Request(b))warnings.push('非預期的 CA 01 連線請求');}
   else if(valid&&[0x7a,0x7b,0x61].includes(type)){f(5,d.length,'回覆資料',hex(d));warnings.push(type===0x61?'寫入 ACK 不含原命令識別碼，需依前後順序配對':'連線回覆已出現；仍需後續控制器查詢確認流程');}

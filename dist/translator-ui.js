@@ -1,10 +1,10 @@
-import {connectCN105,queryCN105,sampleSetCN105,CN105Engine} from './cn105.js?v=1.3.7';
-import {PROFILES} from './catalog.js?v=1.3.7';
-import {translateText,translateCapture,translationText} from './translator.js?v=1.3.7';
+import {connectCN105,queryCN105,sampleSetCN105,CN105Engine} from './cn105.js?v=1.3.8';
+import {PROFILES} from './catalog.js?v=1.3.8';
+import {translateText,translateCapture,translationText} from './translator.js?v=1.3.8';
+import {taiTranslationSample} from './translator-samples.js?v=1.3.8';
 const $=id=>document.getElementById(id);
 const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const SAMPLES={
-  tai:'RX: 06 01 83 00 1A 9E\nTX: 06 01 83 00 1A 9E\nRX: 06 01 03 FF FF 04\nTX: 06 01 03 00 1A 1E\nTX: 06 01 24 00 17 34',
   s21:'RX: 02 46 31 77 03\nTX: 06 02 47 31 31 33 4E 41 6B 03\nRX: 06\nRX: 02 52 61 B3 03\nTX: 06 02 53 61 31 30 30 2D 72 03\nRX: 06',
   damaged:'RX: 06 01 83 00 1A 9F\n06 01 03 FF FF 04\n02 53 48 41 33 32 2B 6C 03\n06'
 };
@@ -36,7 +36,8 @@ export function initTranslator({getCapture,openTab}){
   for(const id of ['translator-protocol','translator-device','translator-direction','translator-format'])$(id).addEventListener('change',()=>{if($('translator-input').value.trim())run();});
   $('translator-search').addEventListener('input',()=>{page=0;render();});$('translator-problems').addEventListener('change',()=>{page=0;render();});
   $('translator-prev').addEventListener('click',()=>{page--;render();});$('translator-next').addEventListener('click',()=>{page++;render();});
-  for(const [id,key] of [['translation-sample-tai','tai'],['translation-sample-s21','s21'],['translation-sample-errors','damaged']])$(id).addEventListener('click',()=>{$('translator-input').value=SAMPLES[key];$('translator-protocol').value=key==='tai'?'taiseia':key==='s21'?'s21':'auto';$('translator-direction').value='auto';$('translator-format').value='standard';$('translator-device').value='auto';$('translator-search').value='';$('translator-problems').checked=false;run();});
+  $('translation-sample-tai').addEventListener('click',()=>{const sample=taiTranslationSample($('translator-device').value);$('translator-input').value=sample.text;$('translator-protocol').value='taiseia';$('translator-direction').value='auto';$('translator-format').value='standard';$('translator-device').value=String(sample.deviceId);$('translator-search').value='';$('translator-problems').checked=false;run();if(result)notice(`已載入${sample.name}的 7 筆合成範例，包含設備辨識、讀取、寫入與完整狀態；非實機擷取，不會傳送串口資料。`);});
+  for(const [id,key] of [['translation-sample-s21','s21'],['translation-sample-errors','damaged']])$(id).addEventListener('click',()=>{$('translator-input').value=SAMPLES[key];$('translator-protocol').value=key==='s21'?'s21':'auto';$('translator-direction').value='auto';$('translator-format').value='standard';$('translator-device').value='auto';$('translator-search').value='';$('translator-problems').checked=false;run();});
   $('translation-sample-cn105').addEventListener('click',()=>{const sample=new CN105Engine();const requests=[connectCN105(),queryCN105(2),sampleSetCN105(),queryCN105(2),queryCN105(3)];const hex=b=>Array.from(b,n=>n.toString(16).padStart(2,'0').toUpperCase()).join(' ');$('translator-input').value=requests.flatMap(b=>['RX: '+hex(b),...sample.handle(b).responses.map(r=>'TX: '+hex(r))]).join('\n');$('translator-protocol').value='cn105';$('translator-direction').value='auto';$('translator-device').value='auto';$('translator-format').value='standard';$('translator-search').value='';$('translator-problems').checked=false;run();});
   $('translator-load-capture').addEventListener('click',()=>loadCapture(getCapture()));
   $('translator-file').addEventListener('change',async event=>{const file=event.target.files[0];if(!file)return;try{if(file.size>1000000)throw Error('檔案超過 1MB，請分批分析。');$('translator-input').value=await file.text();run();}catch(e){resetOutput();notice(e.message,true);}event.target.value='';});

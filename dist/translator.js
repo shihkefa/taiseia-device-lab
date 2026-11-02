@@ -1,8 +1,8 @@
 // Passive analysis only: never constructs a device engine or accesses a serial port.
-import {PROFILES} from './catalog.js?v=1.3.7';
-import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js?v=1.3.7';
-import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS,isCompatibleS21D4} from './s21.js?v=1.3.7';
-import {checkCN105,checksumCN105,inspectCN105} from './cn105.js?v=1.3.7';
+import {PROFILES} from './catalog.js?v=1.3.8';
+import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js?v=1.3.8';
+import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS,isCompatibleS21D4} from './s21.js?v=1.3.8';
+import {checkCN105,checksumCN105,inspectCN105} from './cn105.js?v=1.3.8';
 const names=new Map(PROFILES.map(p=>[p.saId,p.name]));
 const printable=bytes=>Array.from(bytes,b=>b>=32&&b<=126?String.fromCharCode(b):`\\x${b.toString(16).padStart(2,'0')}`).join('');
 const limits={bytes:65536,packets:2000,text:1000000};
@@ -126,7 +126,8 @@ function decodeS21Packet(b,options,p,field,warn){
   if(b.length===1&&[6,21].includes(b[0])){p.summary=`S21 ${b[0]===6?'ACK 確認':'NAK 拒絕'}`;field(0,1,b[0]===6?'ACK':'NAK','控制字元，沒有 checksum');warn('單一 ACK/NAK 無命令識別碼；須配對前後收發資料，不能單獨證明握手完成。');return;}
   p.checksum={algorithm:'SUM8（02/03/06/15 加 2）',valid:checkS21(b),expected:checksumS21(b.slice(1,-2)),actual:b.at(-2)};
   if(b.length<4||b[0]!==2||b.at(-1)!==3){p.summary='S21 框架不完整';field(0,b.length,'原始資料',printable(b));warn('S21 需要 STX、命令、SUM 與 ETX。');return;}
-  let count=b[1]===77||b[1]===86?1:2;
+  // A four-byte frame has exactly one command byte; its SUM is never CMD.
+  let count=b.length===4||b[1]===77||b[1]===86?1:2;
   if(printable(b.slice(1,7))==='VS000M')count=6;
   else if('FDGRS'.includes(String.fromCharCode(b[1]))&&'UXY'.includes(String.fromCharCode(b[2]))&&b.length>=7&&b.slice(3,5).every(n=>n>=48&&n<=57||n>=65&&n<=90))count=4;
   const cmd=String.fromCharCode(...b.slice(1,1+count)),data=b.slice(1+count,-2),start=1+count;

@@ -368,6 +368,18 @@ test('CN105 automatic scan selects 2400 8E1, responds through UART and confirms 
     await app.fire('disconnect');assert.equal(app.element('handshake-state').textContent,'等待命令');
   });
 
+test('physical CN105 extra-01 settings query completes response flow and SET is reflected on readback',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('protocol-mode').value='cn105';app.fire('protocol-mode','change');
+    const connecting=app.connect();app.request.resolve(app.port);await connecting;await app.push(connectCN105());
+    const bad=queryCN105(0x20);await app.push(bad);assert.equal((await app.inspect()).discovery.confirmedAt,null);assert.equal(app.writes.length,1);
+    const q=[252,66,1,48,16,2,1,...Array(14).fill(0),122];await app.push(q);
+    assert.equal(app.writes.at(-1)[1],0x62);assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+    await app.push(sampleSetCN105());assert.equal(app.writes.at(-1)[1],0x61);await app.push(q);
+    const d=app.writes.at(-1).slice(5,-1);assert.deepEqual([d[3],d[4],d[6],d[7],d[10],d[11]],[1,3,5,7,12,177]);
+    const state=await app.inspect();assert.equal(state.device.services.find(s=>s.id===0).raw,1);assert.equal(state.device.services.find(s=>s.id===3).raw,49);
+  });
+
 test('physical S21 D2 startup ACK permits F1 polling but cannot confirm a handshake alone',
   {timeout:3000,concurrency:false},async context=>{
     const app=await appHarness(context);app.element('protocol-mode').value='s21';app.fire('protocol-mode','change');

@@ -33,7 +33,7 @@ test('invalid values, unknown flags, unsupported profiles, echoes and corrupted 
   const e=new CN105Engine(),before=structuredClone(e.profile);
   const corrupt=sampleSetCN105();corrupt[corrupt.length-1]^=1;
   const other=Array.from(connectCN105());other[3]=0x34;
-  for(const b of [corrupt,other,frameCN105(0x61,Array(16).fill(0)),frameCN105(0x41,payload(1,{1:9,3:1,6:4})),frameCN105(0x41,payload(1,{1:32})),frameCN105(0x41,payload(1,{1:4,14:128})),frameCN105(0x41,payload(0x1f)),queryCN105(0x20),frameCN105(0x5b,[0xca,1]),frameCN105(0x42,payload(2,{1:1}))]){
+  for(const b of [corrupt,other,frameCN105(0x61,Array(16).fill(0)),frameCN105(0x41,payload(1,{1:9,3:1,6:4})),frameCN105(0x41,payload(1,{1:32})),frameCN105(0x41,payload(1,{1:4,14:128})),frameCN105(0x41,payload(0x1f)),queryCN105(0x20),frameCN105(0x5b,[0xca,1]),frameCN105(0x42,payload(2,{1:2})),frameCN105(0x42,payload(2,{1:1,2:1})),frameCN105(0x42,payload(3,{1:1}))]){
     const r=e.handle(b);assert.equal(r.accepted,false);assert.equal(r.responses.length,0);assert.deepEqual(e.profile,before);
   }
 });
@@ -67,15 +67,25 @@ test('responses, wrong UART dialects and short requests cannot lock discovery',(
   for(const b of [frameCN105(0x7a,[0]),frameCN105(0x62,payload(2)),frameCN105(0x42,[2])]){const p=new DiscoveryParser(),s=new DiscoverySession();p.push(b);assert.equal(p.protocol,'auto');assert.equal(isCN105Request(b),false);assert.equal(s.observe('cn105',b).accepted,false);}
   for(const protocol of ['s21','taiseia']){const p=new DiscoveryParser({protocol});assert.equal(p.push(connectCN105()).filter(e=>e.type==='frame'&&e.protocol==='cn105').length,0);}
 });
-test('CN105 handshake requires successful 7A send followed by a valid controller command and resets on reconnect',()=>{
+test('CN105 handshake requires successful 7A and successful response to a subsequent supported command',()=>{
   const s=new DiscoverySession(),e=new CN105Engine(),c=connectCN105(),q=queryCN105(2);
   s.observe('cn105',c,0);assert.equal(s.confirmedAt,null);s.observe('cn105',q,1);assert.equal(s.confirmedAt,null);
   s.sent('cn105',c,e.handle(c).responses[0],2);assert.equal(s.stage,'identity-sent');
   assert.equal(s.observe('cn105',frameCN105(0x7a,[0]),3).accepted,false);assert.equal(s.confirmedAt,null);
-  s.observe('cn105',q,4);assert.equal(s.stage,'established');assert.equal(s.deviceId,'cn105');
+  const unsupported=queryCN105(0x20);s.observe('cn105',unsupported,3.5);assert.equal(e.handle(unsupported).accepted,false);assert.equal(s.confirmedAt,null);
+  s.observe('cn105',q,4);assert.equal(s.stage,'identity-sent');assert.equal(s.deviceId,'cn105');
+  s.sent('cn105',q,e.handle(q).responses[0],4.5);assert.equal(s.stage,'established');
   s.observe('cn105',c,5);assert.equal(s.confirmedAt,null);assert.equal(s.stage,'detected');
   s.sent('cn105',c,e.handle(c).responses[0],6);s.observe('cn105',q,10007);assert.equal(s.confirmedAt,null);
   s.reset();assert.equal(s.protocol,null);assert.equal(s.identitySent,false);
+});
+
+test('COM10 captured GET 02 parameter 01 reads normal state without mutating or inventing fields',()=>{
+  const e=new CN105Engine(),before=structuredClone(e.profile);
+  const b=parseHex('FC 42 01 30 10 02 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 7A');
+  const r=e.handle(b);assert.equal(r.accepted,true);assert.deepEqual(r.responses,e.handle(queryCN105(2)).responses);assert.deepEqual(e.profile,before);
+  const p=decodePacket(b,{direction:'RX'});assert.match(p.summary,/相容參數 01/);assert.match(p.warnings.join(' '),/語意未確認/);assert.doesNotMatch(p.warnings.join(' '),/尚未支援/);
+  b[b.length-1]^=1;assert.equal(e.handle(b).responses.length,0);
 });
 test('CN105 translator decodes public captures, flagged SET, corrupt packets and mixed protocols',()=>{
   const publicSettings=parseHex('FC 62 01 30 10 02 00 00 01 01 0D 00 00 00 00 83 A4 46 00 00 00 DF');

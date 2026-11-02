@@ -14,6 +14,9 @@ export function checkCN105(b){return b.length>=6&&b.length<=70&&b[0]===0xfc&&b[2
 export function isCN105Request(b){return checkCN105(b)&&([0x5a,0x5b].includes(b[1])?b[4]===2&&b[5]===0xca&&b[6]===1:[0x41,0x42].includes(b[1])&&b[4]===16);}
 export const connectCN105=()=>frameCN105(0x5a,[0xca,1]);
 export const queryCN105=code=>frameCN105(0x42,[code,...Array(15).fill(0)]);
+// Observed COM10 settings query variant. The 01 parameter has no confirmed
+// semantics; use the ordinary 02 state response, not a fabricated extension.
+export const isCompatibleCN105Get=d=>d.length===16&&d[0]===2&&d[1]===1&&d.slice(2).every(n=>n===0);
 export const sampleSetCN105=()=>frameCN105(0x41,[1,0x1f,1,1,3,0,5,7,0,0,0,0,0,12,177,0]);
 const field=(id,name,raw,min,max,extra={})=>({id,name,raw,min,max,protocol:'cn105',scale:1,unit:'',enum:null,signed:false,enabled:true,writable:false,command:'CN105',confidence:'公開 CN105 映射',rangeBasis:'模擬範圍，非所有機型的能力保證',source:'echavet/MitsubishiCN105ESPHome',...extra});
 const toggle=(id,name,command,writable=false)=>field(id,name,0,0,1,{command,writable,enum:CN105_ENUMS.power});
@@ -91,7 +94,8 @@ export class CN105Engine{
       for(const c of changes)this.service(c.id).raw=c.after;
       return {accepted:true,responses:[frameCN105(0x61,Array(16).fill(0))],changes,reason:'CN105 '+decodeCN105(b)+' · 已套用並回覆 61 ACK'};
     }
-    if(d.slice(1).some(n=>n!==0))return reject('CN105 未支援帶額外參數的 GET；不臆測回覆');
+    const compatibleGet=isCompatibleCN105Get(d);
+    if(d.slice(1).some(n=>n!==0)&&!compatibleGet)return reject('CN105 未支援帶額外參數的 GET；不臆測回覆');
     const p=Array(16).fill(0);p[0]=d[0];
     switch(d[0]){
       case 2:p[3]=v(0);p[4]=v(1)+(v(6)?8:0);p[5]=31-Math.round(v(3)/2);p[6]=v(2);p[7]=v(4);p[10]=v(5);p[11]=this.profile.temperatureEncoding==='half'?v(3)+128:0;break;
@@ -102,7 +106,7 @@ export class CN105Engine{
       case 0x42:p[1]=v(32);p[2]=v(33);p[3]=v(34);break;
       default:return reject('CN105 GET '+hex([d[0]])+' 未模擬；不回覆虛構狀態');
     }
-    return {accepted:true,responses:[frameCN105(0x62,p)],reason:'CN105 查詢 '+CN105_QUERIES[d[0]]};
+    return {accepted:true,responses:[frameCN105(0x62,p)],reason:'CN105 查詢 '+CN105_QUERIES[d[0]]+(compatibleGet?' · 相容參數 01（語意未確認）；回覆標準 02 狀態':'')};
   }
 }
 export function decodeCN105(b){return inspectCN105(b).summary;}
@@ -116,7 +120,7 @@ export function inspectCN105(b){
   const sf=(offset,id,raw)=>{const s=CN105_PROFILE.services.find(s=>s.id===id),invalid=validateCN105Value(s,raw&65535);f(5+offset,1,s.name,invalid?'未定義原始值 '+raw:displayCN105Value(s,raw&65535));if(invalid)warnings.push(s.name+' 超出參考映射；需依機型確認');};
   if(valid&&[0x5a,0x5b].includes(type)){f(5,d.length,'連線資料',hex(d));if(!isCN105Request(b))warnings.push('非預期的 CA 01 連線請求');}
   else if(valid&&[0x7a,0x7b,0x61].includes(type)){f(5,d.length,'回覆資料',hex(d));warnings.push(type===0x61?'寫入 ACK 不含原命令識別碼，需依前後順序配對':'連線回覆已出現；仍需後續控制器查詢確認流程');}
-  else if(valid&&type===0x42&&d.length===16){summary+=' · '+(CN105_QUERIES[d[0]]||'未支援查詢 '+hex([d[0]]));f(5,1,'查詢代碼',CN105_QUERIES[d[0]]||'未知');f(6,15,'查詢保留資料',hex(d.slice(1)));if(!CN105_QUERIES[d[0]]||d.slice(1).some(n=>n))warnings.push('本模擬器尚未支援此查詢或參數');}
+  else if(valid&&type===0x42&&d.length===16){summary+=' · '+(CN105_QUERIES[d[0]]||'未支援查詢 '+hex([d[0]]));f(5,1,'查詢代碼',CN105_QUERIES[d[0]]||'未知');f(6,15,'查詢保留資料',hex(d.slice(1)));if(isCompatibleCN105Get(d)){summary+=' · 相容參數 01';warnings.push('現場相容查詢：參數 01 語意未確認，回覆標準 02 狀態；未推定額外功能');}else if(!CN105_QUERIES[d[0]]||d.slice(1).some(n=>n))warnings.push('本模擬器尚未支援此查詢或參數');}
   else if(valid&&type===0x41&&d.length===16){
     f(5,1,'SET 子命令',hex([d[0]]));f(6,2,'更新旗標／遠端室溫資料',hex(d.slice(1,3)));
     try{const values=cn105WriteValues(d);summary+=' · '+(values.map(([id,n])=>{const s=CN105_PROFILE.services.find(s=>s.id===id);return s.name+' '+displayCN105Value(s,n);}).join(' / ')||'無更新欄位');

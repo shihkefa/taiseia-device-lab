@@ -62,11 +62,13 @@ export class DiscoveryParser {
 // Evidence is separate from the simulated profile we choose to advertise.
 // No serial open, bare ACK or TX completion alone can establish a handshake.
 export class DiscoverySession {
+  #cn105Followups=new WeakSet();
   constructor(options={}){this.reset(options);}
   reset({protocol='auto',deviceId=1,autoDevice=true}={}){
     this.configuredProtocol=protocol;this.protocol=null;this.deviceId=deviceId;this.autoDevice=autoDevice;
     this.deviceBasis='selected';this.declared=false;this.identitySent=false;this.pending=null;
     this.stage='waiting';this.evidence='等待有效控制器命令';this.lastRx=null;this.confirmedAt=null;
+    this.#cn105Followups=new WeakSet();
   }
   observe(protocol,bytes,now=performance.now()){
     if(!['s21','taiseia','cn105'].includes(protocol)||(protocol==='cn105'&&!isCN105Request(bytes))||(protocol==='s21'&&!isS21Request(bytes))||(protocol==='taiseia'&&!isTaiRequest(bytes)))return {accepted:false,reason:'不是可辨識的控制器命令'};
@@ -75,8 +77,8 @@ export class DiscoverySession {
     let changed=false;
     if(protocol==='cn105'){
       changed=this.deviceId!=='cn105';this.deviceId='cn105';this.deviceBasis='cn105-family';
-      if([0x5a,0x5b].includes(bytes[1])){this.identitySent=false;this.confirmedAt=null;this.stage='detected';this.evidence='收到 CN105 連線請求；尚未送出回覆';}
-      else if(this.identitySent&&now-this.identitySent.at<=10000){this.stage='established';this.confirmedAt=now;this.evidence='已送出 7A 連線回覆，控制器接著送出 GET／SET；CN105 無控制器 ACK';}
+      if([0x5a,0x5b].includes(bytes[1])){this.#cn105Followups=new WeakSet();this.identitySent=false;this.confirmedAt=null;this.stage='detected';this.evidence='收到 CN105 連線請求；尚未送出回覆';}
+      else if(this.identitySent&&now-this.identitySent.at<=10000){this.#cn105Followups.add(bytes);if(this.confirmedAt===null)this.evidence='已收到 CN105 後續 GET／SET，等待支援的命令成功回覆';}
     }else if(protocol==='s21'){
       changed=this.deviceId!=='s21';this.deviceId='s21';this.deviceBasis='s21-family';
       if(this.pending){this.pending=null;this.stage='no-ack';this.evidence='控制器未回 ACK 即開始下一查詢；持續回覆，尚無 ACK 確認';}
@@ -94,6 +96,7 @@ export class DiscoverySession {
   sent(protocol,request,response,now=performance.now()){
     if(protocol==='cn105'){
       if(request[1]===0x5a&&response[1]===0x7a){this.identitySent={at:now};this.stage='identity-sent';this.evidence='已送出 CN105 7A 連線回覆，等待控制器後續 GET／SET 確認';}
+      else if(this.#cn105Followups.has(request)&&checkCN105(response)&&((request[1]===0x42&&response[1]===0x62&&request[5]===response[5])||(request[1]===0x41&&response[1]===0x61))){this.#cn105Followups.delete(request);this.stage='established';this.confirmedAt=now;this.evidence='已完成 CONNECT → 7A → 後續 GET／SET → 62／61 回覆；CN105 無控制器 ACK';}
       else if(this.confirmedAt===null){this.stage='responding';this.evidence='已回覆 CN105 查詢／寫入，尚未觀察到完整 CONNECT 流程';}
     }else if(protocol==='s21'&&response.length>1){
       this.pending={at:now,command:commandS21(response)};

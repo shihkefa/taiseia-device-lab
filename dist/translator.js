@@ -2,6 +2,7 @@
 import {PROFILES} from './catalog.js';
 import {COMMON,hex,hexWord,xor,checkFrame,displayValue,signed,validateProfile} from './protocol.js';
 import {checkS21,checksumS21,S21_PROFILE,S21_COMMANDS} from './s21.js';
+import {checkCN105,checksumCN105,inspectCN105} from './cn105.js';
 const names=new Map(PROFILES.map(p=>[p.saId,p.name]));
 const printable=bytes=>Array.from(bytes,b=>b>=32&&b<=126?String.fromCharCode(b):`\\x${b.toString(16).padStart(2,'0')}`).join('');
 const limits={bytes:65536,packets:2000,text:1000000};
@@ -15,14 +16,18 @@ function byteArray(input){if(!Array.isArray(input)&&!ArrayBuffer.isView(input))t
 export function decodePacket(input,options={}){
   const b=byteArray(input),direction=normalizeDirection(options.direction);
   let protocol=options.protocol||'auto';
-  if(protocol==='auto')protocol=b[0]===2&&b.length>=4?'s21':b.length>=4&&b[0]===b.length?'taiseia':'unknown';
-  if(!['s21','taiseia'].includes(protocol))protocol='unknown';
+  if(protocol==='auto')protocol=b[0]===0xfc&&b.length<=70?'cn105':b[0]===2&&b.length>=4?'s21':b.length>=4&&b[0]===b.length?'taiseia':'unknown';
+  if(!['s21','taiseia','cn105'].includes(protocol))protocol='unknown';
   const p={protocol,bytes:b,hex:hex(b),direction,summary:'',device:null,deviceId:null,fields:[],warnings:[],checksum:null};
   const warn=message=>{if(!p.warnings.includes(message))p.warnings.push(message);};
   const field=(offset,length,label,value)=>{const data=b.slice(offset,Math.min(b.length,offset+length));if(data.length)p.fields.push({offset,length:data.length,label,raw:hex(data),value:String(value??'')});};
   if(protocol==='unknown'){
     p.summary=b.length===1&&[6,21].includes(b[0])?`可能是 S21 ${b[0]===6?'ACK':'NAK'}，也可能是 TaiSEIA 未完成的長度欄位`:'無法確定封包格式／殘包';
     warn('請補完整封包、前後收發資料，或手動指定協議。');field(0,b.length,'原始資料',printable(b));
+  }else if(protocol==='cn105'){
+    const detail=inspectCN105(b);p.summary=detail.summary;p.fields=detail.fields;p.warnings.push(...detail.warnings);p.device='三菱電機 CN105 空調族';p.deviceId='cn105';
+    p.checksum={algorithm:'(FC − SUM) & FF',valid:checkCN105(b),expected:checksumCN105(b.slice(0,-1)),actual:b.at(-1)};
+    if([0x41,0x42,0x5a,0x5b].includes(b[1])&&direction==='TX'||[0x61,0x62,0x7a,0x7b].includes(b[1])&&direction==='RX')warn('CN105 命令角色與方向不符；RX=控制器→設備，TX=設備→控制器。');
   }else if(protocol==='s21')decodeS21Packet(b,options,p,field,warn);
   else decodeTaiPacket(b,options,p,field,warn);
   if(p.checksum?.valid===false)warn('校驗失敗：以下僅按欄位位置解讀，不代表有效命令，也不會修補或執行。');
@@ -175,30 +180,34 @@ function parseHexLine(text,line){
 }
 function splitStream(bytes,options,context){
   const packets=[];let cursor=0;
+  const allow=protocol=>!options.protocol||options.protocol==='auto'||options.protocol===protocol;
+  function cnLength(at){return bytes[at]===0xfc&&at+5<=bytes.length&&bytes[at+4]<=64?bytes[at+4]+6:0;}
   function s21End(at){if(bytes[at]!==2)return -1;for(let i=at+3;i<Math.min(bytes.length,at+131);i++)if(bytes[i]===3)return i;return -1;}
-  function validStart(at){const n=bytes[at];if(options.protocol!=='s21'&&n>=4&&at+n<=bytes.length&&checkFrame(bytes.slice(at,at+n)))return true;const end=s21End(at),candidate=bytes.slice(at,end+1);return options.protocol!=='taiseia'&&end>=0&&end-at<131&&plausibleS21(candidate)&&checkS21(candidate);}
+  function validStart(at){const cn=cnLength(at);if(allow('cn105')&&cn&&checkCN105(bytes.slice(at,at+cn)))return true;const n=bytes[at];if(allow('taiseia')&&n>=4&&at+n<=bytes.length&&checkFrame(bytes.slice(at,at+n)))return true;const end=s21End(at),candidate=bytes.slice(at,end+1);return allow('s21')&&end>=0&&end-at<131&&plausibleS21(candidate)&&checkS21(candidate);}
   while(cursor<bytes.length){
     if(packets.length>=limits.packets)throw Error('封包超過 2000 筆，請分批轉譯。');
     const rest=bytes.length-cursor,first=bytes[cursor],mode=options.protocol||'auto',end=s21End(cursor),nested=bytes.indexOf(2,cursor+1);
     let length=0,protocol='unknown';
     const taiValid=first>=4&&first<=rest&&checkFrame(bytes.slice(cursor,cursor+first));
-    if(mode!=='taiseia'&&end>=0&&end-cursor<131&&plausibleS21(bytes.slice(cursor,end+1))&&checkS21(bytes.slice(cursor,end+1))){length=end-cursor+1;protocol='s21';}
-    else if(mode!=='s21'&&taiValid){length=first;protocol='taiseia';}
-    else if(mode!=='taiseia'&&[6,21].includes(first)&&(mode==='s21'||context.protocol==='s21')){length=1;protocol='s21';}
-    else if(mode!=='taiseia'&&first===2&&nested>cursor&&(end<0||nested<end)&&validStart(nested)){length=nested-cursor;protocol=mode==='s21'?'s21':'unknown';}
-    else if(mode!=='taiseia'&&first===2&&end>=0&&end-cursor<131){length=end-cursor+1;protocol='s21';}
-    else if(mode!=='s21'&&first>=4&&first<=rest&&(mode==='taiseia'||[0,...names.keys()].includes(bytes[cursor+1])||options.format==='bare-services')){length=first;protocol='taiseia';}
+    if(allow('cn105')&&cnLength(cursor)&&checkCN105(bytes.slice(cursor,cursor+cnLength(cursor)))){length=cnLength(cursor);protocol='cn105';}
+    else if(allow('s21')&&end>=0&&end-cursor<131&&plausibleS21(bytes.slice(cursor,end+1))&&checkS21(bytes.slice(cursor,end+1))){length=end-cursor+1;protocol='s21';}
+    else if(allow('taiseia')&&taiValid){length=first;protocol='taiseia';}
+    else if(allow('cn105')&&first===0xfc){length=Math.min(cnLength(cursor)||rest,rest);protocol='cn105';}
+    else if(allow('s21')&&[6,21].includes(first)&&(mode==='s21'||context.protocol==='s21')){length=1;protocol='s21';}
+    else if(allow('s21')&&first===2&&nested>cursor&&(end<0||nested<end)&&validStart(nested)){length=nested-cursor;protocol=mode==='s21'?'s21':'unknown';}
+    else if(allow('s21')&&first===2&&end>=0&&end-cursor<131){length=end-cursor+1;protocol='s21';}
+    else if(allow('taiseia')&&first>=4&&first<=rest&&(mode==='taiseia'||[0,...names.keys()].includes(bytes[cursor+1])||options.format==='bare-services')){length=first;protocol='taiseia';}
     else{
       let next=cursor+1;while(next<bytes.length&&!validStart(next))next++;
       length=next-cursor;protocol=mode==='auto'?'unknown':mode;
       if(mode==='auto'&&first>=4&&first>rest&&[0,...names.keys()].includes(bytes[cursor+1]))protocol='taiseia';
     }
-    if(length>1&&protocol!=='unknown'&&!(protocol==='s21'?checkS21(bytes.slice(cursor,cursor+length)):checkFrame(bytes.slice(cursor,cursor+length)))){
+    if(length>1&&protocol!=='unknown'&&!(protocol==='cn105'?checkCN105(bytes.slice(cursor,cursor+length)):protocol==='s21'?checkS21(bytes.slice(cursor,cursor+length)):checkFrame(bytes.slice(cursor,cursor+length)))){
       for(let i=cursor+1;i<cursor+length;i++)if(validStart(i)){length=i-cursor;break;}
     }
     const packet=decodePacket(bytes.slice(cursor,cursor+length),{...options,protocol,deviceId:selection(options)||context.deviceId||'auto',requestBytes:context.request});
     packet.offset=cursor;packets.push(packet);
-    if(packet.checksum?.valid){context.protocol=protocol;if(packet.deviceId&&packet.deviceId!=='s21')context.deviceId=packet.deviceId;
+    if(packet.checksum?.valid){context.protocol=protocol;if(protocol==='taiseia'&&packet.deviceId)context.deviceId=packet.deviceId;
       if(protocol==='taiseia'&&length===6&&packet.bytes[1]===0&&packet.bytes[3]===255&&packet.bytes[4]===255&&packet.direction!=='TX')context.request=packet.bytes;else context.request=null;
     }else if(protocol!=='s21'||length!==1)context.request=null;
     cursor+=length;
@@ -217,6 +226,7 @@ export function translateText(text,options={}){
     let direction=normalizeDirection(options.direction);
     const prefix=line.match(/^(?:(?:\[[^\]]+\]|\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s*)?(RX|TX)\s*[:>\-]?\s*/i);
     if(prefix){direction=prefix[1].toUpperCase();line=line.slice(prefix[0].length);}
+    else if(direction==='auto'&&groups.length)direction=groups.at(-1).direction;
     const bytes=parseHexLine(line,index+1);count+=bytes.length;if(count>limits.bytes)throw Error('單次最多 64KB 封包資料。');
     const group=groups.at(-1);if(group&&group.direction===direction){group.bytes.push(...bytes);group.lines.push(...bytes.map(()=>index+1));}else groups.push({direction,line:index+1,bytes,lines:bytes.map(()=>index+1)});
   });
@@ -235,10 +245,10 @@ export function translateCapture(capture,options={}){
     const bytes=byteArray(record.bytes);count+=bytes.length;if(count>limits.bytes)throw Error('單次最多轉譯 64KB 封包資料。');
     if(record.source!==lastSource){contextId=null;lastSource=record.source;}
     let profile,raw=capture.profiles?.[record.profileRevision];
-    if(raw?.protocol!=='s21'&&raw){try{profile=validateProfile(structuredClone(raw));}catch{if(!warnings.length)warnings.push('部分設定快照未通過驗證，使用內建功能表。');}}
-    const optionsForPacket={...options,profile,protocol:['taiseia','s21'].includes(record.protocol)?record.protocol:options.protocol||'auto',direction:record.direction,deviceId:selection(options)||profile?.saId||contextId||'auto',format:['bare-services','registration'].includes(record.format)?record.format:options.format,requestBytes:previous.get(record.requestId)};
+    if(!['s21','cn105'].includes(raw?.protocol)&&raw){try{profile=validateProfile(structuredClone(raw));}catch{if(!warnings.length)warnings.push('部分設定快照未通過驗證，使用內建功能表。');}}
+    const optionsForPacket={...options,profile,protocol:['taiseia','s21','cn105'].includes(record.protocol)?record.protocol:options.protocol||'auto',direction:record.direction,deviceId:selection(options)||profile?.saId||contextId||'auto',format:['bare-services','registration'].includes(record.format)?record.format:options.format,requestBytes:previous.get(record.requestId)};
     const p=decodePacket(bytes,optionsForPacket);p.index=packets.length+1;p.recordId=record.id;p.source=String(record.source||'匯入').slice(0,100);p.timestamp=String(record.timestamp||'').slice(0,100);packets.push(p);
-    if(p.checksum?.valid){if(p.deviceId&&p.deviceId!=='s21')contextId=p.deviceId;if(record.direction==='RX'&&bytes.length===6&&bytes[1]===0&&bytes[3]===255&&bytes[4]===255)previous.set(record.id,bytes);}
+    if(p.checksum?.valid){if(p.protocol==='taiseia'&&p.deviceId)contextId=p.deviceId;if(record.direction==='RX'&&bytes.length===6&&bytes[1]===0&&bytes[3]===255&&bytes[4]===255)previous.set(record.id,bytes);}
   }
   return {packets,warnings,source:'capture',skipped:capture.records.length-records.length};
 }

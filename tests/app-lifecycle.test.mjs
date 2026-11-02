@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {connectCN105,queryCN105,sampleSetCN105,CN105_PROFILE} from '../dist/cn105.js';
+import {hex} from '../dist/protocol.js';
 import {PROFILES} from '../dist/catalog.js';
 import {translateCapture} from '../dist/translator.js';
 
@@ -310,7 +312,7 @@ test('automatic UART scanning times out at sixty seconds and never reopens after
       assert.equal(open.port,app.port);
       assert.deepEqual(
         [open.options.baudRate,open.options.dataBits,open.options.parity,open.options.stopBits],
-        index%2?[2400,8,'even',2]:[9600,8,'none',1],
+        [[9600,8,'none',1],[2400,8,'even',2],[2400,8,'even',1]][index%3],
       );
     }
     await app.advanceTo(59999);
@@ -325,6 +327,48 @@ test('automatic UART scanning times out at sixty seconds and never reopens after
     assert.equal(app.closeCount,14);
     assert.equal(app.requestCount,1);
     assert.equal((await app.inspect()).connected,true,'timeout stops scanning without disconnecting');
+  });
+
+test('CN105 automatic scan selects 2400 8E1, responds through UART and confirms only after the next command',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context,{mockClock:true}),connecting=app.connect();app.request.resolve(app.port);await connecting;
+    await app.advanceTo(4000);await app.advanceTo(8000);
+    assert.equal(app.opens.at(-1).options.stopBits,1);assert.equal(app.opens.at(-1).options.baudRate,2400);assert.equal(app.opens.at(-1).options.parity,'even');
+    const c=connectCN105();await app.push(c.slice(0,3));assert.equal(app.writes.length,0);await app.push(c.slice(3));
+    assert.equal(hex(app.writes[0]),'FC 7A 01 30 01 00 54');assert.equal(app.element('handshake-state').textContent,'已回覆 CN105 連線');
+    assert.equal(app.element('detected-protocol').textContent,'三菱電機 CN105');assert.equal(app.element('device-type').value,'cn105');
+    await app.push(queryCN105(2));assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+    await app.push(sampleSetCN105());await app.push(queryCN105(2));const state=await app.inspect();assert.equal(state.device.services.find(s=>s.id===3).raw,49);
+    assert.equal(app.writes.at(-1)[16],177);assert.equal(app.element('send-status').hidden,true);assert.equal(app.element('cn105-settings').hidden,false);
+    await app.advanceTo(12000);assert.equal(app.opens.length,3);
+    const before=await app.inspect(),writes=structuredClone(app.writes);
+    app.element('translator-input').value='RX: '+hex(sampleSetCN105());app.fire('translator-run');await settle();
+    assert.equal(Number(app.element('translator-valid').textContent),1);assert.match(app.element('translator-results').innerHTML,/24.5 °C/);assert.deepEqual(await app.inspect(),before);assert.deepEqual(app.writes,writes);
+    app.fire('translation-sample-cn105');assert.equal(Number(app.element('translator-total').textContent),10);assert.deepEqual(app.writes,writes);
+    await app.fire('disconnect');assert.equal(app.element('handshake-state').textContent,'等待命令');
+  });
+
+test('a CN105 frame decoded at the S21 UART preset is queued until TX framing is corrected',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context,{mockClock:true}),connecting=app.connect();app.request.resolve(app.port);await connecting;await app.advanceTo(4000);
+    assert.equal(app.opens.at(-1).options.stopBits,2);
+    await app.push([...connectCN105(),...queryCN105(2)]);await settle();
+    assert.equal(app.opens.at(-1).options.stopBits,1);assert.equal(app.opens.length,3);assert.equal(app.requestCount,1);
+    assert.equal(app.writes.length,2);assert.equal(app.writes[0][1],0x7a);assert.equal(app.writes[1][1],0x62);
+    assert.notEqual(app.element('handshake-state').textContent,'握手流程完成（後續命令）','a coalesced query arrived before our reply and cannot confirm receipt');
+    await app.push(queryCN105(2));
+    assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+  });
+
+test('CN105 selection, import, offline demonstration and TaiSEIA restoration remain independent',
+  {timeout:3000,concurrency:false},async context=>{
+    const app=await appHarness(context);app.element('device-type').value='4';app.fire('device-type','change');
+    const p=structuredClone(CN105_PROFILE);p.services.find(s=>s.id===24).raw=65535;
+    await app.fire('import-profile','change',{target:{files:[{size:1000,text:async()=>JSON.stringify(p)}],value:''}});
+    assert.equal(app.element('device-type').value,'cn105');assert.equal(Number(app.element('stop-bits').value),1);assert.equal(Number(app.element('baud').value),2400);
+    assert.match(app.element('device-fields').innerHTML,/value="65535"/);app.fire('demo');const state=await app.inspect();
+    assert.equal(state.discovery.stage,'established');assert.equal(state.discovery.source,'離線');assert.equal(app.writes.length,0);assert.match(app.element('handshake-state').textContent,/離線示範/);
+    app.element('protocol-mode').value='taiseia';app.fire('protocol-mode','change');assert.equal(app.element('device-type').value,4);
   });
 
 test('translating a D1 command while physically connected cannot write UART or change device and handshake',

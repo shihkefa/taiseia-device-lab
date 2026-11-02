@@ -1,6 +1,7 @@
 import {checkFrame} from './protocol.js';
 import {checkS21,commandS21,ACK,NAK} from './s21.js';
-export const SERIAL_PRESETS={taiseia:{baudRate:9600,dataBits:8,parity:'none',stopBits:1},s21:{baudRate:2400,dataBits:8,parity:'even',stopBits:2}};
+import {checkCN105,isCN105Request} from './cn105.js';
+export const SERIAL_PRESETS={taiseia:{baudRate:9600,dataBits:8,parity:'none',stopBits:1},s21:{baudRate:2400,dataBits:8,parity:'even',stopBits:2},cn105:{baudRate:2400,dataBits:8,parity:'even',stopBits:1}};
 const SA_IDS=[1,3,4,8,14,15];
 export function isTaiRequest(b){return b.length===6&&checkFrame(b)&&(b[1]===0?b[2]<=8&&b[2]!==3&&b[3]===255&&b[4]===255:SA_IDS.includes(b[1])&&(b[2]&127)!==127&&((b[2]&128)!==0||(b[3]===255&&b[4]===255)));}
 export function isS21Request(b){return checkS21(b)&&(/^[FDR][A-Za-z0-9]$/.test(commandS21(b))||['M','V','VS000M'].includes(commandS21(b)));}
@@ -19,7 +20,16 @@ export class DiscoveryParser {
   drain(stale){
     const events=[];
     while(this.buffer.length){
-      const first=this.buffer[0],allowS21=this.protocol!=='taiseia',allowTai=this.protocol!=='s21';
+      const first=this.buffer[0],allowS21=['auto','s21'].includes(this.protocol),allowTai=['auto','taiseia'].includes(this.protocol);
+      if(['auto','cn105'].includes(this.protocol)&&first===0xfc){
+        const length=this.buffer.length>=5?this.buffer[4]+6:null;
+        if(this.buffer.length>=4&&(this.buffer[2]!==1||this.buffer[3]!==0x30)||length>70){events.push({type:'error',protocol:'cn105',bytes:this.buffer.splice(0,1),reason:'CN105 標頭／長度不符；重新同步'});continue;}
+        if(length===null||this.buffer.length<length){if(!stale)break;events.push({type:'error',protocol:'cn105',bytes:this.buffer.splice(0,1),reason:'CN105 殘包逾時；重新同步'});continue;}
+        const bytes=Uint8Array.from(this.buffer.slice(0,length));
+        if(!checkCN105(bytes)){const next=this.buffer.findIndex((b,i)=>i>0&&b===0xfc&&this.buffer[i+2]===1&&this.buffer[i+3]===0x30);events.push({type:'error',protocol:'cn105',bytes:this.buffer.splice(0,next>0?next:length),reason:'CN105 checksum 不符；靜默丟棄並重新同步'});continue;}
+        this.buffer.splice(0,length);if(this.protocol==='auto'&&isCN105Request(bytes))this.protocol='cn105';
+        events.push({type:'frame',protocol:'cn105',bytes});continue;
+      }
       if(this.protocol==='s21'&&[ACK,NAK].includes(first)){events.push({type:'control',protocol:'s21',bytes:Uint8Array.from(this.buffer.splice(0,1))});continue;}
       if(allowS21&&first===2){
         const end=this.buffer.indexOf(3,3);
@@ -52,11 +62,15 @@ export class DiscoverySession {
     this.stage='waiting';this.evidence='等待有效控制器命令';this.lastRx=null;this.confirmedAt=null;
   }
   observe(protocol,bytes,now=performance.now()){
-    if((protocol==='s21'&&!isS21Request(bytes))||(protocol==='taiseia'&&!isTaiRequest(bytes)))return {accepted:false,reason:'不是可辨識的控制器命令'};
+    if(!['s21','taiseia','cn105'].includes(protocol)||(protocol==='cn105'&&!isCN105Request(bytes))||(protocol==='s21'&&!isS21Request(bytes))||(protocol==='taiseia'&&!isTaiRequest(bytes)))return {accepted:false,reason:'不是可辨識的控制器命令'};
     if(this.configuredProtocol!=='auto'&&protocol!==this.configuredProtocol||this.protocol&&protocol!==this.protocol)return {accepted:false,reason:'協議與已鎖定連線不符'};
     this.protocol=protocol;
     let changed=false;
-    if(protocol==='s21'){
+    if(protocol==='cn105'){
+      changed=this.deviceId!=='cn105';this.deviceId='cn105';this.deviceBasis='cn105-family';
+      if([0x5a,0x5b].includes(bytes[1])){this.identitySent=false;this.confirmedAt=null;this.stage='detected';this.evidence='收到 CN105 連線請求；尚未送出回覆';}
+      else if(this.identitySent&&now-this.identitySent.at<=10000){this.stage='established';this.confirmedAt=now;this.evidence='已送出 7A 連線回覆，控制器接著送出 GET／SET；CN105 無控制器 ACK';}
+    }else if(protocol==='s21'){
       changed=this.deviceId!=='s21';this.deviceId='s21';this.deviceBasis='s21-family';
       if(this.pending){this.pending=null;this.stage='no-ack';this.evidence='控制器未回 ACK 即開始下一查詢；持續回覆，尚無 ACK 確認';}
     }else if(bytes[1]!==0){
@@ -71,7 +85,10 @@ export class DiscoverySession {
     return {accepted:true,changed,deviceId:this.deviceId};
   }
   sent(protocol,request,response,now=performance.now()){
-    if(protocol==='s21'&&response.length>1){
+    if(protocol==='cn105'){
+      if(request[1]===0x5a&&response[1]===0x7a){this.identitySent={at:now};this.stage='identity-sent';this.evidence='已送出 CN105 7A 連線回覆，等待控制器後續 GET／SET 確認';}
+      else if(this.confirmedAt===null){this.stage='responding';this.evidence='已回覆 CN105 查詢／寫入，尚未觀察到完整 CONNECT 流程';}
+    }else if(protocol==='s21'&&response.length>1){
       this.pending={at:now,command:commandS21(response)};
       if(!this.confirmedAt){this.stage='waiting-ack';this.evidence='已送出 ACK 與狀態封包，等待控制器 ACK';}
     }else if(protocol==='taiseia'){

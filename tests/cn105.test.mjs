@@ -33,7 +33,7 @@ test('invalid values, unknown flags, unsupported profiles, echoes and corrupted 
   const e=new CN105Engine(),before=structuredClone(e.profile);
   const corrupt=sampleSetCN105();corrupt[corrupt.length-1]^=1;
   const other=Array.from(connectCN105());other[3]=0x34;
-  for(const b of [corrupt,other,frameCN105(0x61,Array(16).fill(0)),frameCN105(0x41,payload(1,{1:9,3:1,6:4})),frameCN105(0x41,payload(1,{1:32})),frameCN105(0x41,payload(1,{1:4,14:128})),frameCN105(0x41,payload(0x1f)),queryCN105(0x20),frameCN105(0x5b,[0xca,1]),frameCN105(0x42,payload(2,{1:2})),frameCN105(0x42,payload(2,{1:1,2:1})),frameCN105(0x42,payload(3,{1:1}))]){
+  for(const b of [corrupt,other,frameCN105(0x61,Array(16).fill(0)),frameCN105(0x41,payload(1,{1:9,3:1,6:4})),frameCN105(0x41,payload(1,{1:32})),frameCN105(0x41,payload(1,{1:4,14:128})),frameCN105(0x41,payload(0x1f)),queryCN105(0x20),frameCN105(0x5b,[0xca,1]),frameCN105(0x42,payload(2,{1:2})),frameCN105(0x42,payload(2,{1:1,2:1})),frameCN105(0x42,payload(0x20,{1:1}))]){
     const r=e.handle(b);assert.equal(r.accepted,false);assert.equal(r.responses.length,0);assert.deepEqual(e.profile,before);
   }
 });
@@ -80,10 +80,12 @@ test('CN105 handshake requires successful 7A and successful response to a subseq
   s.reset();assert.equal(s.protocol,null);assert.equal(s.identitySent,false);
 });
 
-test('COM10 captured GET 02 parameter 01 reads normal state without mutating or inventing fields',()=>{
+test('COM10 captured GET 02 and 03 parameter 01 read standard state without inventing fields',()=>{
   const e=new CN105Engine(),before=structuredClone(e.profile);
   const b=parseHex('FC 42 01 30 10 02 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 7A');
   const r=e.handle(b);assert.equal(r.accepted,true);assert.deepEqual(r.responses,e.handle(queryCN105(2)).responses);assert.deepEqual(e.profile,before);
+  const room=parseHex('FC 42 01 30 10 03 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 79');assert.deepEqual(e.handle(room).responses,e.handle(queryCN105(3)).responses);
+  for(const code of [2,3,4,6,9,0x42]){assert.deepEqual(e.handle(frameCN105(0x42,payload(code,{1:1}))).responses,e.handle(queryCN105(code)).responses);assert.deepEqual(e.profile,before);}
   const p=decodePacket(b,{direction:'RX'});assert.match(p.summary,/相容參數 01/);assert.match(p.warnings.join(' '),/語意未確認/);assert.doesNotMatch(p.warnings.join(' '),/尚未支援/);
   b[b.length-1]^=1;assert.equal(e.handle(b).responses.length,0);
 });

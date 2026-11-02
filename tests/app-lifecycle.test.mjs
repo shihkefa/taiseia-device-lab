@@ -375,6 +375,7 @@ test('physical CN105 extra-01 settings query completes response flow and SET is 
     const bad=queryCN105(0x20);await app.push(bad);assert.equal((await app.inspect()).discovery.confirmedAt,null);assert.equal(app.writes.length,1);
     const q=[252,66,1,48,16,2,1,...Array(14).fill(0),122];await app.push(q);
     assert.equal(app.writes.at(-1)[1],0x62);assert.equal(app.element('handshake-state').textContent,'握手流程完成（後續命令）');
+    await app.push([252,66,1,48,16,3,1,...Array(14).fill(0),121]);assert.equal(app.writes.at(-1)[5],3);assert.equal(app.writes.at(-1)[11],182);
     await app.push(sampleSetCN105());assert.equal(app.writes.at(-1)[1],0x61);await app.push(q);
     const d=app.writes.at(-1).slice(5,-1);assert.deepEqual([d[3],d[4],d[6],d[7],d[10],d[11]],[1,3,5,7,12,177]);
     const state=await app.inspect();assert.equal(state.device.services.find(s=>s.id===0).raw,1);assert.equal(state.device.services.find(s=>s.id===3).raw,49);
